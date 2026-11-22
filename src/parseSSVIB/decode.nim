@@ -306,11 +306,11 @@ proc readVibInfo*(path: string; sampleIntervalUs = DefaultIntervalUs): VibInfo =
   var size = 0'i64
   var got = 0
   try:
-    size = getFileSize(path)
-    if size > MaxVibBytes:
-      raiseFormat(path & " is larger than any .vib file", 0)
     let f = open(path, fmRead)
     try:
+      size = f.getFileSize # of the open file: a path's size can lag on Windows
+      if size > MaxVibBytes:
+        raiseFormat(path & " is larger than any .vib file", 0)
       got = f.readBuffer(addr head[0], int(min(size, int64(head.len))))
     finally:
       f.close()
@@ -384,12 +384,12 @@ proc readVibInto*(path: string; s: var VibShot; buffer: var seq[byte];
   ## larger than `MaxVibBytes` raises `VibFormatError` before it is read; one that
   ## cannot be read, `IOError` with the path.
   try:
-    let size = getFileSize(path)
-    if size > MaxVibBytes:
-      raiseFormat(path & " is larger than any .vib file", 0)
-    buffer.setLen(int(size))
     let f = open(path, fmRead)
     try:
+      let size = f.getFileSize # of the open file: a path's size can lag on Windows
+      if size > MaxVibBytes:
+        raiseFormat(path & " is larger than any .vib file", 0)
+      buffer.setLen(int(size))
       if size > 0 and f.readBuffer(addr buffer[0], int(size)) != int(size):
         raise newException(IOError, "the file is shorter than its size says")
     finally:
