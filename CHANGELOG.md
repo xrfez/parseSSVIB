@@ -26,3 +26,7 @@
 - Samples and the computed ground force are written as recorded; no option changes a
   sign.
 - Benchmark in `bench/`, a libFuzzer target in `tests/fuzz/`.
+- `VibWriteOptions.traceOrder`: `voFile` (the default, unchanged) or `voForces`, the
+  roles in the order of a `.dat` file's channels (reference, reaction mass, baseplate and
+  ground force of the primary set, then the other set's, hydraulics and drive, per-cycle
+  values).

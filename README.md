@@ -80,6 +80,20 @@ have against the trigger: the scatter to expect is wider than the stated sigma. 
 assumes a clean reference at full scale and a sweep of a few hundred crossings; a short
 logarithmic sweep can pass its checks and still be a few frames off.
 
+**Trace order.** `VibWriteOptions.traceOrder`: `voFile` (the default) writes the chosen
+channels in file order, then the per-cycle values, then the computed ground forces.
+`voForces` writes by role, in the order of a `.dat` file's channels: the reference; the
+primary set's reaction-mass acceleration, baseplate acceleration and ground force; the
+other set's the same three; torque motor, valve displacement, mass displacement, drive;
+the per-cycle values (a trace that is not chosen is left out, the rest keep their
+order). With the defaults the traces are 1 reference, 2 reaction mass B, 3 baseplate B,
+4 ground force B, 5 reaction mass A, 6 baseplate A, 7 to 10 torque motor, valve, mass
+displacement, drive. The trace codes and the samples follow their column in either
+order; what moves is the position. The SEG-Y trace number (and the SEG-D channel number)
+is that position, 1, 2, ... in the order written: in `voFile` order the position of a
+column is its place in the table above (reference first, then the nine channels in file
+order), in `voForces` order it is the position in the list just given.
+
 **SEG-Y Rev 0** knows trace codes 1 to 8 only. The writers keep the codes in the file
 anyway (the traces' status is unknown, which parseSEG then writes together with the
 code), but a reader that checks codes against Rev 0 sees codes above 8 as undefined; the
