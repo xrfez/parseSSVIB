@@ -50,14 +50,19 @@ const
   CodeReference = 21'i16
   CodeBaseplate = 19'i16
   CodeMass = 18'i16
-  CodeGroundForce = 20'i16 ## the primary set's computed ground force
-  CodeOtherBase = 256'i16  ## 256 + the column number for the other columns
+  CodeGroundForce = 20'i16      ## the primary set's computed ground force
+  CodeOtherBase = 256'i16       ## 256 + the column number for the other columns
   CodeGroundForceOther = 267'i16
-  CardWidth = 76           ## parseSEG puts "C nn " before each textual header card of 80
+  CardWidth = 76                ## parseSEG puts "C nn " before each textual header card of 80
   MaxSegdFileNumber = 16_777_215
+  MaxSegyRecord = 2_147_483_647 ## the field is 32 bits
+  MaxIntervalUs = 65535.0       ## the SEG-Y sample interval field is 16 bits
   ConverterCodes = [21'i16, 19, 18, 20, 29, 28, 30, 33, 34, 35, 36, 1, 1]
 
 type
+  CloseDiagnostics = object of IOError
+    ## The writer reported diagnostics when it closed: the file is complete.
+
   VibUnits* = enum
     vuCounts   ## raw counts, as recorded (default)
     vuPhysical ## pounds-force, g and percent, by `scaleOf` (needs `VibWriteOptions.scale`)
@@ -185,27 +190,32 @@ func clockOfZero(s: VibShot; opts: VibWriteOptions): ClockTime =
   else:
     result = (posixSeconds(s.start), 0)
 
-func statusOf(code: int16): TraceStatus =
+func statusOf(code: int16; major: int): TraceStatus =
   ## The status the SEG-Y writer keeps a code for: it writes a code only when it says
-  ## what the status says, and codes above 22 (21 is the last of Rev 1 that is not
-  ## "optional use") have no status; they stay unknown so that the code reaches the file.
-  case code
-  of 18 .. 22: tsAuxiliary
-  of 1: tsLive
-  else: tsUnknown
+  ## what the status says (`segyStatus` of parseSEG). Rev 0 defines codes 1 to 8 only,
+  ## so there every code but 1 stays unknown; from Rev 1 the codes 18 to 22 are
+  ## auxiliary and the codes above 22 ("optional use") have no status. Unknown is what
+  ## lets those codes reach the file.
+  if major == 0:
+    result = if code == 1: tsLive else: tsUnknown
+  else:
+    case code
+    of 18 .. 22: result = tsAuxiliary
+    of 1: result = tsLive
+    else: result = tsUnknown
 
 func toTraceKeys*(s: VibShot; code: int16; channel: int; opts = VibWriteOptions();
-    firstFrame = 0): TraceKeys =
+    firstFrame = 0; segyMajor = 1): TraceKeys =
   ## The keys of trace number `channel` (from 1) of `s` in parseSEG's shape: the record
-  ## number, the trace `code`, its status (auxiliary for codes 18 to 22, unknown for the codes above
-  ## 22, which have none: parseSEG writes a code only when it fits the status), the interval as `s` says, the
+  ## number, the trace `code`, its status for SEG-Y revision `segyMajor` (see `statusOf`: auxiliary for codes 18 to
+  ## 22, unknown for the codes above 22, and in Rev 0 for every code but 1), the interval as `s` says, the
   ## time of sample `firstFrame` as `t0Ms` (see the module's text on the time axis)
   ## and the clock time of t = 0 as `time`. No position, line or station.
   result = initTraceKeys()
   result.record = float64(recordOf(s, opts))
   result.channel = float64(channel)
   result.traceCode = code
-  result.status = statusOf(code)
+  result.status = statusOf(code, segyMajor)
   result.intervalUs = s.sampleIntervalUs
   result.t0Ms = (float64(firstFrame) - originFrame(s, opts)) * s.sampleIntervalUs / 1000
   let clock = clockOfZero(s, opts)
@@ -256,7 +266,7 @@ proc plan(s: VibShot; opts: VibWriteOptions; segd: bool): seq[TracePlan] =
           segd: (if which == opts.primary: sctSourceSigEstimated else: sctSourceOther),
           name: "ground force, estimated, from accelerometer set " & $which)
 
-proc checkOptions(s: VibShot; opts: VibWriteOptions; segd: bool; extHeader = false) =
+proc checkOptions(s: VibShot; opts: VibWriteOptions; segd: bool; major = 1) =
   ## Everything that makes a shot or the options unwritable, said in our words.
   if s.len == 0:
     fail(s, "the shot holds no samples")
@@ -272,15 +282,24 @@ proc checkOptions(s: VibShot; opts: VibWriteOptions; segd: bool; extHeader = fal
     fail(s, "the sample interval " & $s.sampleIntervalUs & " us is not positive")
   if opts.record < -1:
     fail(s, "the record number " & $opts.record & " is negative")
-  if opts.timeAxis == vaTrigger and s.hasTrigger and not (s.triggerFrame >= 0 and
-      s.triggerFrame <= float64(s.len)):
+  if s.hasTrigger and not (s.triggerFrame >= 0 and s.triggerFrame <= float64(s.len)):
     fail(s, "the trigger frame " & $s.triggerFrame & " is outside the shot's " &
       $s.len & " frames")
+  if not s.triggerSigmaFrames.isNaN and not (s.triggerSigmaFrames >= 0 and
+      s.triggerSigmaFrames <= 1e6):
+    fail(s, "the trigger frame's uncertainty " & $s.triggerSigmaFrames &
+      " is not between 0 and 1e6 frames")
+  if s.sampleIntervalUs > MaxIntervalUs:
+    fail(s, "the sample interval " & $s.sampleIntervalUs & " us is above " &
+      $MaxIntervalUs & ", the most a SEG-Y interval field holds")
+  if not segd and recordOf(s, opts) > MaxSegyRecord:
+    fail(s, "the record number " & $recordOf(s, opts) & " is above " & $MaxSegyRecord &
+      ", the most a SEG-Y field record number holds")
   if opts.externalConverter:
     if segd:
       fail(s, "the external converter's traces are SEG-Y Rev 1 only: its trace " &
         "codes mean something else in SEG-D")
-    if extHeader:
+    if major >= 2:
       fail(s, "the external converter's traces are SEG-Y Rev 1 only: its trace " &
         "codes 28 to 36 mean electric and magnetic field components in Rev 2")
     if opts.converterCut < 0 or opts.converterCut >= s.len:
@@ -299,7 +318,8 @@ proc checkOptions(s: VibShot; opts: VibWriteOptions; segd: bool; extHeader = fal
       let (wb, wm) = (float64(s.header.baseplateLb), float64(s.header.massLb))
       if not positive(wb) or not positive(wm):
         fail(s, "the header's weights are " & $wb & " and " & $wm & " lb: the " &
-          "ground force of set " & $which & " cannot be computed")
+          "ground force of set " & $which & " cannot be computed (set groundForce = {} to " &
+          "write without it)")
   if opts.units == vuPhysical and not opts.externalConverter and opts.groundForce != {}:
     try:
       for which in opts.groundForce:
@@ -307,7 +327,7 @@ proc checkOptions(s: VibShot; opts: VibWriteOptions; segd: bool; extHeader = fal
           opts.scale, true)
         discard scaleOf(s, (if which == vsA: vcMassA else: vcMassB), opts.scale, true)
     except ValueError as e:
-      fail(s, e.msg & " (needed for the ground force in pounds-force)")
+      fail(s, e.msg & " (needed for the ground force in pounds-force; set groundForce = {} to write without it)")
   if plan(s, opts, segd).len == 0:
     fail(s, "no trace is chosen: channels, cycle values and ground forces are empty")
   if segd:
@@ -321,7 +341,8 @@ proc checkOptions(s: VibShot; opts: VibWriteOptions; segd: bool; extHeader = fal
       fail(s, "the record number " & $recordOf(s, opts) & " is above " &
         $MaxSegdFileNumber & ", the most SEG-D can number")
 
-proc outTraces(s: VibShot; opts: VibWriteOptions; segd, exactTime: bool): seq[OutTrace] =
+proc outTraces(s: VibShot; opts: VibWriteOptions; segd, exactTime: bool;
+    major = 1): seq[OutTrace] =
   ## The traces to write: keys, samples and SEG-D channel type of each.
   result = @[]
   let first = if opts.externalConverter: opts.converterCut else: 0
@@ -354,7 +375,7 @@ proc outTraces(s: VibShot; opts: VibWriteOptions; segd, exactTime: bool): seq[Ou
       for i in 0 ..< n:
         values[i] = wb * (float64(s.data[bp][first + i]) - mb) +
           wm * (float64(s.data[rm][first + i]) - mm)
-    var k = toTraceKeys(s, p.code, number, opts, first)
+    var k = toTraceKeys(s, p.code, number, opts, first, major)
     if segd: k.status = tsAuxiliary
     if exactTime:
       k.time = float64(clock.seconds)
@@ -374,19 +395,23 @@ template translating(s: VibInfo; what: string; body: untyped) =
     fail(s, "cannot be written as " & what & ": " & e.msg)
 
 proc writeSegyTraces*(w: var SeismicWriter; s: VibShot; opts = VibWriteOptions();
-    extHeader = false) =
-  ## Appends the traces of `s` to the open SEG-Y writer `w`: one record. `extHeader`
+    extHeader = false; major = 1) =
+  ## Appends the traces of `s` to the open SEG-Y writer `w`: one record. `major` is the
+  ## writer's SEG-Y revision (0, 1 or 2; `extHeader` means 2): Rev 0 knows trace codes 1
+  ## to 8 only, and the traces' status is set so that parseSEG still keeps the codes.
+  ## `extHeader`
   ## must be set only for a Rev 2 or later writer (the default, false, suits every
   ## revision): the time's nanoseconds then go exactly into Trace Header Extension 1,
   ## which a Rev 1 or Rev 0 writer has not got (it would refuse them). Without it the
   ## time goes in as seconds with a fraction, as far as the format and the writer
   ## keep one. `writeSegy` sets it from its options. Raises `VibWriteError` (see the
   ## module's text), also for `externalConverter` with `extHeader` (Rev 2).
-  checkOptions(s, opts, false, extHeader)
+  let rev = if extHeader: max(major, 2) else: major
+  checkOptions(s, opts, false, rev)
   var overrides: seq[HeaderOverride] = @[]
   if extHeader:
     overrides.add headerOverride("ext1.nanoseconds", clockOfZero(s, opts).nanosecond)
-  for t in outTraces(s, opts, false, extHeader):
+  for t in outTraces(s, opts, false, extHeader, rev):
     translating(s, "SEG-Y"):
       w.writeTrace(t.keys, t.samples, overrides, t.channelType)
 
@@ -407,7 +432,7 @@ func wrapped(cards: var seq[string]; text: string) =
   var rest = text
   while rest.len > CardWidth:
     var at = rest.rfind(' ', 0, CardWidth)
-    if at <= 0: at = CardWidth
+    if at <= 2: at = CardWidth # no space, or only the continuation's own
     cards.add rest[0 ..< at]
     rest = "  " & rest[at .. ^1].strip(trailing = false)
   cards.add rest
@@ -492,7 +517,7 @@ proc finish(w: var SeismicWriter) =
   for d in w.close():
     problems.add d.msg
   if problems.len > 0:
-    raise newException(IOError, problems.join("; "))
+    raise newException(CloseDiagnostics, problems.join("; "))
 
 proc writeSegy*(s: VibShot; path: string; opts = SegyOutputOptions();
     vib = VibWriteOptions()) =
@@ -501,7 +526,7 @@ proc writeSegy*(s: VibShot; path: string; opts = SegyOutputOptions();
   ## textual header names the file, the time axis, the traces and the units. Raises
   ## `VibWriteError` (an `externalConverter` shot needs a Rev 1 `opts.revision`), and
   ## `IOError` with the writer's diagnostics when it reports any.
-  checkOptions(s, vib, false, opts.revision.major >= 2)
+  checkOptions(s, vib, false, int(opts.revision.major))
   if vib.externalConverter and opts.revision.major != 1:
     fail(s, "the external converter's traces are SEG-Y Rev 1 only, not Rev " &
       $opts.revision.major)
@@ -511,7 +536,7 @@ proc writeSegy*(s: VibShot; path: string; opts = SegyOutputOptions();
   var w: SeismicWriter
   translating(s, "SEG-Y"):
     w = openSeismicWriter(path, o)
-  w.writeSegyTraces(s, vib, opts.revision.major >= 2)
+  w.writeSegyTraces(s, vib, opts.revision.major >= 2, int(opts.revision.major))
   translating(s, "SEG-Y"):
     w.finish()
 
@@ -572,6 +597,8 @@ template writeClaimed(path: string; overwrite: bool; body: untyped) =
   ## Runs `body`, which writes `path`; a failure removes the empty file claimed for it.
   try:
     body
+  except CloseDiagnostics:
+    raise # the finished file stands: only a failed write leaves nothing behind
   except CatchableError:
     if not overwrite:
       try:
@@ -591,7 +618,7 @@ proc writeSegyTo*(s: VibShot; folder: string; serial: int64;
   ## the name. A folder that cannot be made is an `IOError`.
   var v = vib
   v.controllerSerial = serial
-  checkOptions(s, v, false, opts.revision.major >= 2)
+  checkOptions(s, v, false, int(opts.revision.major))
   result = claimedPath(s, serial, folder, ".sgy", overwrite)
   writeClaimed(result, overwrite):
     s.writeSegy(result, opts, v)

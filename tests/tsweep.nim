@@ -6,6 +6,9 @@
 ## sample counted as negative, `zeroSamples` fails; with `TailFrames` at 4000,
 ## `endsInSweep` fails; with the sigma set to 0, `uncertainty` fails; with the rate taken
 ## from the wrong coefficient, `fractions` fails.
+## Also seen to fail: with the negative-start rule taken out, `negativeStart` fails; with
+## the interval floor removed, `invalid` fails; with `trigger >= 0` removed, `zeroSamples`
+## fails.
 
 import std/[math, random]
 import parseSSVIB/[sweep, types]

@@ -16,8 +16,8 @@
 ## | drive output | `drivePerCount`, unit unknown |
 ##
 ## `groundForce` adds the baseplate and reaction-mass forces of one accelerometer set,
-## each weighted by its mass: a computed value, not a measured one, and not a
-## reading of the ground. Nothing here changes a sign.
+## each weighted by its mass: a value computed from weights and accelerations, and not
+## a reading of the ground. Nothing here changes a sign.
 
 import std/math
 import ./types

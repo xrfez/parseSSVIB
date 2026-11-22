@@ -9,6 +9,9 @@
 ## out, `sizeLimit` fails; with the interval check loosened, `interval` fails; with the
 ## shot's `triggerKnown` not reset in `decodeInto`, `reuse` fails; with `nameNumberOf`
 ## taking any extension, `names` fails.
+## Also seen to fail: with `serialFromPath` taking any 1 to 9 digits, `names` fails; with
+## the name number not reset, `nameNumberReset` fails. `lyingSize` fails only on a 32-bit
+## build.
 
 import std/[math, os, strutils]
 import parseSSVIB/[decode, types]

@@ -12,6 +12,10 @@
 ## force summing one channel twice, `codes` fails; with the record axis taking the
 ## trigger's time, `timeAxis` fails; with a sign flipped on the way out,
 ## `polarityAsRecorded` fails.
+## Also seen to fail: with the card writer's `at <= 2` back at `at <= 0`, `cardLoop` never
+## returns; with Rev 0 given the Rev 1 status, `revisionZero` fails; with the clock's
+## `round` taken out, `roundedClock` fails; with the interval, record or trigger bounds
+## taken out, `intervalBound`, `recordBound` and `cardLoop` fail.
 
 import std/[atomics, math, os, sequtils, strutils]
 import parseSEG
@@ -543,8 +547,8 @@ proc main*() =
     var badTrigger = s
     badTrigger.triggerFrame = float64(n) + 5
     refusal(badTrigger, ["trigger frame", "outside the shot's"])
-    badTrigger.writeSegy(dir / "bt.sgy", vib = VibWriteOptions(timeAxis: vaRecord,
-      channels: {vcReference}, groundForce: {})) # the record axis does not use it
+    refusal(badTrigger, ["trigger frame", "outside the shot's"], vib = VibWriteOptions(
+      timeAxis: vaRecord)) # on every axis
     # an extreme year does not overflow the time: SEG-D takes it or refuses it in words
     var far = s
     far.start.year = 9999
@@ -749,6 +753,110 @@ proc main*() =
     doAssertRaises(VibWriteError): # asking for the extension a Rev 1 file has not got
       w3.writeSegyTraces(known, extHeader = true)
     discard w3.close()
+
+  block revisionZero:
+    ## Rev 0 knows trace codes 1 to 8 only: the codes still reach the file (the status is
+    ## unknown, so parseSEG keeps them), the time of sample 0 is a whole ms.
+    let zeroRev = SegyOutputOptions(revision: SegyRevision(major: 0, minor: 0))
+    s.writeSegy(dir / "r0.sgy", zeroRev)
+    var f = openSeismic(dir / "r0.sgy", keys = true)
+    let expected = [21'i16, 257, 258, 19, 18, 261, 262, 263, 264, 20]
+    doAssert f.len == 10
+    for i in 0 ..< 10:
+      doAssert f.traceKeys(i).traceCode == expected[i], $(i, f.traceKeys(i).traceCode)
+    doAssert abs(f.traceKeys(0).t0Ms + 20.125) <= 0.5, $f.traceKeys(0).t0Ms
+    let back = readBack(f, 10)
+    for c in VibChannel:
+      doAssert bitsEqual(back[ord(c)], s.samples(c))
+    f.close()
+    # through a Rev 0 writer of one's own
+    var w = openSeismicWriter(dir / "r0b.sgy", zeroRev)
+    w.writeSegyTraces(s, VibWriteOptions(channels: {vcReference, vcMassB}, groundForce: {}),
+      major = 0)
+    doAssert w.close().len == 0
+    f = openSeismic(dir / "r0b.sgy", keys = true)
+    doAssert f.traceKeys(0).traceCode == 21 and f.traceKeys(1).traceCode == 18
+    f.close()
+    doAssert toTraceKeys(s, 21, 1, segyMajor = 0).status == tsUnknown
+    doAssert toTraceKeys(s, 21, 1, segyMajor = 1).status == tsAuxiliary
+    doAssert toTraceKeys(s, 1, 1, segyMajor = 0).status == tsLive
+
+  block cardLoop:
+    ## A word longer than a card, in the text or from a number, never makes the card
+    ## writer loop; an absurd trigger frame or uncertainty is refused on every axis.
+    var long = s
+    long.incompleteWhy = "x " & repeat('y', 80)
+    long.complete = false
+    let cards = textCards(long, VibWriteOptions(timeAxis: vaRecord))
+    for c in cards:
+      doAssert c.len <= 76, c
+    var run = 0 # the 80 y's are all there, over the cards that follow the sentence
+    for c in cards:
+      if c.strip(chars = {' ', 'y'}).len == 0 or c.endsWith("yyyy"):
+        run += c.count('y')
+    doAssert run == 80, $run
+    for axis in [vaTrigger, vaRecord]:
+      for bad in [1e100, Inf, -Inf, -1.0, float64(n) + 1]:
+        var h = s
+        h.triggerFrame = bad
+        refusal(h, ["trigger frame"], vib = VibWriteOptions(timeAxis: axis))
+        doAssertRaises(VibWriteError):
+          discard textCards(h, VibWriteOptions(timeAxis: axis))
+      for bad in [1e100, Inf, -1.0, 1e7]:
+        var h = s
+        h.triggerSource = tsEstimated
+        h.triggerSigmaFrames = bad
+        refusal(h, ["uncertainty"], vib = VibWriteOptions(timeAxis: axis))
+
+  block intervalBound:
+    ## An interval the SEG-Y field cannot hold is refused in words (it used to overflow
+    ## the clock arithmetic of the record axis).
+    var big = s
+    big.sampleIntervalUs = 1e15
+    big.setTrigger(trig, 40.5)
+    refusal(big, ["sample interval", "most a SEG-Y interval field holds"],
+      vib = VibWriteOptions(timeAxis: vaRecord))
+    refusal(big, ["sample interval", "most a SEG-Y interval field holds"], true,
+      VibWriteOptions(timeAxis: vaRecord))
+    big.sampleIntervalUs = 65536
+    refusal(big, ["65536.0 us"], vib = VibWriteOptions(timeAxis: vaRecord))
+    big.sampleIntervalUs = 65535
+    big.writeSegy(dir / "big.sgy", vib = VibWriteOptions(timeAxis: vaRecord,
+      channels: {vcReference}, groundForce: {}))
+    doAssert textCards(big, VibWriteOptions()).len > 0
+
+  block recordBound:
+    refusal(s, ["record number 2147483648", "SEG-Y"], vib = VibWriteOptions(
+      record: 2_147_483_648'i64))
+    refusal(s, ["record number 9007199254740993"], vib = VibWriteOptions(
+      record: 9_007_199_254_740_993'i64))
+    s.writeSegy(dir / "rec.sgy", vib = VibWriteOptions(record: 2_147_483_647,
+      channels: {vcReference}, groundForce: {}))
+    var f = openSeismic(dir / "rec.sgy", keys = true)
+    doAssert f.traceKeys(0).record == 2147483647.0
+    f.close()
+
+  block roundedClock:
+    ## On the record axis the first frame's time is the trigger minus the frame times the
+    ## interval, rounded to the nanosecond (not cut).
+    var known = s
+    var t = trig
+    t.nanosecond = 500_000_000
+    known.setTrigger(t, 40.0000019) # 40.0000019 frames x 500 us = 20000000.95 ns
+    known.writeSegy(dir / "rnd.sgy", vib = VibWriteOptions(timeAxis: vaRecord,
+      groundForce: {}, channels: {vcReference}))
+    var f = openSeismic(dir / "rnd.sgy", keys = true)
+    doAssert f.headerValue(0, "ext1", "nanoseconds") == "479999999", f.headerValue(0, "ext1", "nanoseconds")
+    f.close()
+
+  block zeroWeightMessage:
+    var zero = s
+    zero.header.massLb = 0
+    refusal(zero, ["groundForce = {}"], vib = VibWriteOptions(channels: {vcReference}))
+    refusal(zero, ["groundForce = {}"], vib = VibWriteOptions(units: vuPhysical,
+      scale: made, channels: {vcReference}))
+    zero.writeSegy(dir / "zw.sgy", vib = VibWriteOptions(channels: {vcReference},
+      groundForce: {})) # and so it is written
 
   block unwritable:
     doAssertRaises(CatchableError):
