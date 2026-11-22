@@ -27,7 +27,7 @@ proc main*() =
   h.massCal = 2560.0
   h.holdDownLb = 40000.0
   h.sensitivity1 = 20.0
-  h.sensitivity2 = 25.0
+  h.sensitivity2 = 31.5
   h.baseplateLb = 6000.0
   h.massLb = 4000.0
   let s = shot(h)
@@ -37,10 +37,10 @@ proc main*() =
     doAssert scaleOf(s, vcReference, VibScale()) == 40000.0 / 32767.0 # no constant needed
     doAssert scaleOf(s, vcBaseplateA, k) == 6000.0 * (0.5 / 20.0)
     doAssert scaleOf(s, vcMassA, k) == 4000.0 * (0.5 / 20.0)
-    doAssert scaleOf(s, vcBaseplateB, k) == 6000.0 * (0.5 / 25.0)
-    doAssert scaleOf(s, vcMassB, k) == 4000.0 * (0.5 / 25.0)
+    doAssert scaleOf(s, vcBaseplateB, k) == 6000.0 * (0.5 / 31.5)
+    doAssert scaleOf(s, vcMassB, k) == 4000.0 * (0.5 / 31.5)
     doAssert scaleOf(s, vcBaseplateA, k, force = false) == 0.5 / 20.0
-    doAssert scaleOf(s, vcMassB, k, force = false) == 0.5 / 25.0
+    doAssert scaleOf(s, vcMassB, k, force = false) == 0.5 / 31.5
     doAssert scaleOf(s, vcTorqueMotor, k) == 0.125
     doAssert scaleOf(s, vcValve, k) == 8000.0 / 3200.0
     doAssert scaleOf(s, vcMassStroke, k) == 8000.0 / 2560.0
@@ -106,7 +106,7 @@ proc main*() =
       for i in 0 ..< s.len:
         doAssert p[i] == float32(f * float64(s.data[c][i])), $(c, i)
     let g = physical(s, vcMassB, k, force = false)
-    doAssert g[5] == float32((0.5 / 25.0) * float64(s.data[vcMassB][5]))
+    doAssert g[5] == float32((0.5 / 31.5) * float64(s.data[vcMassB][5]))
     doAssertRaises(ValueError):
       discard physical(s, vcDrive, VibScale())
 
