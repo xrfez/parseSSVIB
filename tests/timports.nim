@@ -4,8 +4,8 @@
 ## umbrella module `parseSSVIB.nim`; the umbrella module itself from nowhere in the
 ## package.
 ##
-## Seen to fail: with `import ../ui/imgui/app` planted in `decode.nim`, or
-## `import ./toseg` planted in `types.nim`, `packageImports` names it.
+## Seen to fail: with `import ../ui/imgui/app` planted in `decode.nim`, `packageImports`
+## names it.
 
 import std/[os, strutils, sequtils]
 

@@ -2,12 +2,10 @@
 ## constants, the refusals for a missing constant or a zero weight, and the computed
 ## ground force.
 ##
-## Seen to fail: with the valve and mass calibrations swapped in `scaleOf`,
-## `factors` fails; with the baseplate weight used for the reaction mass,
-## `factors` and `groundForce` fail; with `need` accepting zero, `refusals` fails;
-## with the sign of the ground force flipped, `groundForce` and `polarity` fail; with
-## set A's sensitivity read for set B, `sensitivities` fails; with `physical`
-## rounding to float32 before the multiplication, `physical` fails.
+## Seen to fail: with the valve calibration read for the mass displacement, `factors`
+## fails; with `need` accepting zero, `refusals` fails; with the sign of the ground force
+## flipped, `groundForce` and `polarity` fail; with set A's sensitivity read for set B,
+## `factors` and `sensitivities` fail.
 
 import std/[math, strutils]
 import parseSSVIB/[decode, types, units]

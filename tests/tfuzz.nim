@@ -4,11 +4,8 @@
 ## seeds: the same inputs every run. Run in a debug build (range, index and overflow
 ## checks on) and in `-d:danger` by `nim testRelease`.
 ##
-## Seen to fail: with the tail check `tail != 0` replaced by `tail > 1`, `everyPrefix`
-## accepts a file cut in a frame; with the frame count taken as `body div 25`,
-## `byteFlips` dies with an IndexDefect in a debug build; with the sweep fit's
-## `count < MinCrossings` test removed, `randomFrames` dies in the fit's matrix
-## (an invalid fit that is not refused is a finding, not a crash).
+## Seen to fail: with the frame count taken as `body div 25`, or the tail check taken
+## out, `everyPrefix` fails (a cut file is accepted or its frames miscounted).
 
 import std/[math, random]
 import parseSSVIB/[decode, sweep, types]

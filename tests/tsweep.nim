@@ -1,14 +1,11 @@
 ## The sweep fit and the stopped-recording test, on synthetic references with made-up
 ## sweeps.
 ##
-## Seen to fail: with the crossings counted from the wrong sample (`i` for `i - 1`),
-## `fractions` fails; with the quadratic's root taken at the first crossing's
-## neighbour (`u = 0` instead of the Newton start at `-1`), `fractions` fails; with
-## `MinCrossings` at 20, `invalid` accepts the short sweep; with `MaxResidualCycles`
-## at 50, `invalid` accepts the cubic sweep; with a zero sample counted as negative,
-## `zeroSamples` fails; with `TailFrames` at 4000, `endsInSweep` fails; with the
-## sigma left out of the fit, `uncertainty` fails; with the rate computed from `c[1]`,
-## `fractions` fails.
+## Seen to fail: with `MinCrossings` at 20, `invalid` accepts the short sweep; with
+## `MaxResidualCycles` at 1e6, `invalid` accepts the slightly curved sweep; with a zero
+## sample counted as negative, `zeroSamples` fails; with `TailFrames` at 4000,
+## `endsInSweep` fails; with the sigma set to 0, `uncertainty` fails; with the rate taken
+## from the wrong coefficient, `fractions` fails.
 
 import std/[math, random]
 import parseSSVIB/[sweep, types]
@@ -80,6 +77,10 @@ proc main*() =
     let cubic = fitSweep(synthRef(SynthVib(cubicHzPerS2: 40)))
     isNone cubic
     doAssert cubic.crossings >= 200 and cubic.residualCycles > 0.05
+    # a slightly curved frequency law: only the residual limit refuses it
+    let mild = fitSweep(synthRef(SynthVib(cubicHzPerS2: 0.5)))
+    isNone mild
+    doAssert mild.residualCycles > 0.05 and mild.residualCycles < 1.0
     let tiny = fitSweep(synthRef(SynthVib(afterTrigger: 1500))) # about 40 cycles
     isNone tiny
     doAssert tiny.crossings < 200 and tiny.crossings > 20

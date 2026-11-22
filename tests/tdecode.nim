@@ -1,16 +1,14 @@
 ## The decoder against synthetic files: every field round-trips, the refusals say what
 ## is wrong, and a copy cut short is told from a corrupt file.
 ##
-## Seen to fail: with the sign of the 16-bit counts lost (`int16` read as `uint16`
-## wrapped), `roundTrip` fails; with the header floats read one byte late, `header`
-## fails; with the month limit at 13, `badDates` fails; with the kind check taken out
-## of `fillInfo`, `kinds` fails; with the tail check taken out, `partialFrame` fails;
-## with the `frames == 0` refusal taken out, `noSamples` fails; with the size limit
-## taken out of `fillInfo`, `sizeLimit` fails; with the interval check left out,
-## `interval` fails; with the shot's trigger fields not reset in `decodeInto`,
-## `reuse` fails; with `readVibInto` growing the buffer before the size check,
-## `sizeLimit` fails; with `nameNumberOf` taking any extension, `names` fails; with
-## the second's limit at 61, `badDates` fails.
+## Seen to fail: with the 16-bit counts masked to 15 bits in `decodeInto`, `roundTrip`
+## fails; with the hold-down weight read one byte late, `header` fails; with the month
+## limit at 13 or the second's at 61, `badDates` fails; with the kind check taken out of
+## `fillInfo`, `refusals` fails; with the tail check taken out, `partialFrame` fails;
+## with the `frames == 0` refusal taken out, `noSamples` fails; with the size check taken
+## out, `sizeLimit` fails; with the interval check loosened, `interval` fails; with the
+## shot's `triggerKnown` not reset in `decodeInto`, `reuse` fails; with `nameNumberOf`
+## taking any extension, `names` fails.
 
 import std/[math, os, strutils]
 import parseSSVIB/[decode, types]

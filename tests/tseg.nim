@@ -1,18 +1,17 @@
 ## A decoded shot written through parseSEG's SEG-Y and SEG-D writers and read back with
 ## parseSEG: samples bit for bit, trace codes, the time axis, times and text.
 ##
-## Seen to fail: with `segyTraceCode` returning 19 for set A while A is not primary,
-## `mapping` and `codes` fail; with the status left out of `toTraceKeys`, `codes`
-## fails; with `t0Ms` positive in `toTraceKeys`, `timeAxis` fails; with the
-## `ext1.nanoseconds` override left out, `exactNanoseconds` fails; with the mean not
-## removed in `outTraces`, `scaleAndMean` fails; with the ground force summing the same
-## channel twice, `groundForce` fails; with the cycle values' codes at 256 + 8,
-## `cycleValues` fails; with the converter's cut applied after the mean, `externalConverter`
-## fails; with the Rev 2 refusal of the converter left out, `externalRefusals` fails;
-## with the SEG-D channel types swapped, `segd` fails; with `CardWidth` at 80, `cards`
-## fails; with the claim of the file name left out, `exclusiveClaim` fails; with a
-## sign flipped on the way, `polarityAsRecorded` fails; with the time of t = 0 taken
-## from the trigger on the record axis, `timeAxis` fails.
+## Seen to fail: with `segyTraceCode` ignoring `primary` for set A, `mapping` fails; with
+## the status of every trace tsDead, `codes` fails; with `t0Ms` positive in
+## `toTraceKeys`, `codes` and `timeAxis` fail; with the `ext1.nanoseconds` override left
+## out, `exactNanoseconds` fails; with the mean not removed, `scaleAndMean` fails; with
+## the Rev 2 refusal of the converter left out, `externalRefusals` fails; with
+## `CardWidth` at 80, `cards` fails; with the claim of the file name left out,
+## `folderForms` fails; with the SEG-D baseplate type swapped for the mass type, `segd`
+## fails; with the cycle values' codes at 256 + 8, `cycleValues` fails; with the ground
+## force summing one channel twice, `codes` fails; with the record axis taking the
+## trigger's time, `timeAxis` fails; with a sign flipped on the way out,
+## `polarityAsRecorded` fails.
 
 import std/[atomics, math, os, sequtils, strutils]
 import parseSEG
