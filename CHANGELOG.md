@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 - Unreleased
+## 0.1.0 - 2026-11-22
 
 - Decoder for a vibrator controller's `.vib` signature files: `parseVib`, `readVib`,
   `decodeInto` and `readVibInto` (a shot and a buffer kept between files),
