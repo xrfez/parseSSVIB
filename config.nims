@@ -2,6 +2,7 @@
 import std/os
 
 switch("outdir", "bin")
+switch("path", thisDir() / "src") # the package itself, also where nim.cfg has no path line
 
 const tester = "c -r --hints:off --warnings:off tests/tester.nim"
 
