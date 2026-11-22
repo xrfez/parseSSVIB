@@ -66,9 +66,9 @@ proc main() =
     for i in 0 ..< count:
       let after = if i mod 8 == 7: 8000 else: 24000 # a 12 s sweep; one 4 s record in eight
       let name = made / (intToStr(i, 4) & ".VIB")
-      writeFile(name, cast[string](synthVib(SynthVib(afterTrigger: after,
+      writeFile(name, synthVib(SynthVib(afterTrigger: after,
         preTrigger: 600.37 + float64(i mod 97), startHz: 6.0, rateHzPerS: 8.0 +
-        float64(i mod 5)))))
+        float64(i mod 5))))
       paths.add name
   else:
     for dir in args:

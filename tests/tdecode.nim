@@ -308,7 +308,7 @@ proc main*() =
     for syn in [SynthVib(afterTrigger: 300), SynthVib(afterTrigger: 1, preTrigger: 0.5),
         SynthVib(afterTrigger: 40, tailBytes: 7)]:
       let d = synthVib(syn)
-      writeFile(dir / "0042.VIB", cast[string](d))
+      writeFile(dir / "0042.VIB", d)
       let full = parseVib(d, allowIncomplete = true)
       for info in [parseVibInfo(d), parseVibInfo(d.toOpenArray(0, 46), int64(d.len)),
           readVibInfo(dir / "0042.VIB")]:
@@ -367,7 +367,7 @@ proc main*() =
     var buffer: seq[byte] = @[]
     for (name, syn) in [("0001.VIB", SynthVib(afterTrigger: 500)),
         ("0002.vib", SynthVib(afterTrigger: 20))]:
-      writeFile(dir / name, cast[string](synthVib(syn)))
+      writeFile(dir / name, synthVib(syn))
       readVibInto(dir / name, shot, buffer)
       doAssert shot.frames == frameCount(syn) and buffer.len == 47 + 26 * shot.frames
       sameShot(shot, readVib(dir / name))
@@ -379,7 +379,7 @@ proc main*() =
     let dir = getTempDir() / ("ssvib-tdecode-name-" & $getCurrentProcessId())
     createDir(dir)
     defer: removeDir(dir)
-    writeFile(dir / "0077.VIB", cast[string](synthVib(SynthVib(afterTrigger: 20))))
+    writeFile(dir / "0077.VIB", synthVib(SynthVib(afterTrigger: 20)))
     var shot = readVib(dir / "0077.VIB")
     doAssert shot.nameNumber == 77
     decodeInto(shot, synthVib(SynthVib(afterTrigger: 20)))
