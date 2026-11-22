@@ -1,0 +1,29 @@
+# Nim compiler artifacts
+nimcache/
+.nimcache/
+bin/
+htmldocs/
+*.exe
+*.out
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# Dependencies (atlas.lock pins them; `nim depsSync` or `atlas rep atlas.lock` fills deps/)
+.nimble-paths
+deps/
+.atlas/
+
+# Fuzzing: the binaries and the corpus the fuzzer grows
+/tests/fuzz/bin/
+/tests/fuzz/corpus/
+
+# Editor and OS metadata
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
