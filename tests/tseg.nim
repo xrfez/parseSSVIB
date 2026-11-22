@@ -858,6 +858,77 @@ proc main*() =
     zero.writeSegy(dir / "zw.sgy", vib = VibWriteOptions(channels: {vcReference},
       groundForce: {})) # and so it is written
 
+  block traceOrder:
+    ## `voForces`: the reference; the primary set's mass, baseplate and ground force; the
+    ## other set's the same; torque motor, valve, mass displacement, drive; per-cycle
+    ## values. Codes and samples follow their column; the SEG-Y trace number is the
+    ## position.
+    proc check(vib: VibWriteOptions; codes: seq[int16]; cols: seq[string]) =
+      var o = vib
+      o.traceOrder = voForces
+      let p = dir / "ord.sgy"
+      s.writeSegy(p, vib = o)
+      var f = openSeismic(p, keys = true)
+      doAssert f.len == codes.len, $(f.len, codes.len)
+      let back = readBack(f, f.len)
+      for i in 0 ..< codes.len:
+        doAssert f.traceKeys(i).traceCode == codes[i], $(i, f.traceKeys(i).traceCode)
+        doAssert f.traceKeys(i).channel == float64(i + 1)
+        # the samples are those of the named column
+        let want = case cols[i]
+          of "ref": s.samples(vcReference)
+          of "mA": s.samples(vcMassA)
+          of "bA": s.samples(vcBaseplateA)
+          of "mB": s.samples(vcMassB)
+          of "bB": s.samples(vcBaseplateB)
+          of "tm": s.samples(vcTorqueMotor)
+          of "valve": s.samples(vcValve)
+          of "stroke": s.samples(vcMassStroke)
+          of "drive": s.samples(vcDrive)
+          of "c1": s.samples(vvDriveRatio)
+          of "c2": s.samples(vvCycle2)
+          of "gfA": groundForce(s, vsA)
+          else: groundForce(s, vsB)
+        doAssert bitsEqual(back[i], want), $(i, cols[i])
+      f.close()
+    check(VibWriteOptions(), @[21'i16, 18, 19, 20, 258, 257, 261, 262, 263, 264],
+      @["ref", "mB", "bB", "gfB", "mA", "bA", "tm", "valve", "stroke", "drive"])
+    check(VibWriteOptions(groundForce: {vsA, vsB}, cycleValues: true),
+      @[21'i16, 18, 19, 20, 258, 257, 267, 261, 262, 263, 264, 265, 266],
+      @["ref", "mB", "bB", "gfB", "mA", "bA", "gfA", "tm", "valve", "stroke", "drive",
+        "c1", "c2"])
+    check(VibWriteOptions(groundForce: {}), @[21'i16, 18, 19, 258, 257, 261, 262, 263, 264],
+      @["ref", "mB", "bB", "mA", "bA", "tm", "valve", "stroke", "drive"])
+    check(VibWriteOptions(channels: {vcReference, vcMassB, vcBaseplateB}),
+      @[21'i16, 18, 19, 20], @["ref", "mB", "bB", "gfB"])
+    check(VibWriteOptions(channels: {vcMassB, vcValve}, groundForce: {}),
+      @[18'i16, 262], @["mB", "valve"])
+    check(VibWriteOptions(primary: vsA, groundForce: {vsA, vsB}),
+      @[21'i16, 18, 19, 20, 260, 259, 267, 261, 262, 263, 264],
+      @["ref", "mA", "bA", "gfA", "mB", "bB", "gfB", "tm", "valve", "stroke", "drive"])
+    # file order is unchanged and explicit
+    s.writeSegy(dir / "ord2.sgy", vib = VibWriteOptions(traceOrder: voFile))
+    var f = openSeismic(dir / "ord2.sgy", keys = true)
+    doAssert f.traceKeys(3).traceCode == 19 and f.traceKeys(9).traceCode == 20
+    f.close()
+    # SEG-D: the same traces, grouped by channel type as the writer does; one
+    # trace per column whichever the order
+    s.writeSegd(dir / "ord.sgd", VibWriteOptions(traceOrder: voForces, cycleValues: true,
+      groundForce: {vsA, vsB}))
+    f = openSeismic(dir / "ord.sgd", keys = true)
+    doAssert f.len == 13
+    let back = readBack(f, 13)
+    for want in [s.samples(vcReference), s.samples(vcMassB), s.samples(vcBaseplateB),
+        groundForce(s, vsB), s.samples(vcMassA), s.samples(vcBaseplateA),
+        groundForce(s, vsA), s.samples(vcDrive), s.samples(vvCycle2)]:
+      doAssert anyIt(back, bitsEqual(it, want))
+    f.close()
+    # the text header lists the traces in the written order
+    let cards = flat(textCards(s, VibWriteOptions(traceOrder: voForces)).join(" "))
+    doAssert "trace 2 reaction-mass acceleration, set B (counts) trace 3 baseplate " &
+      "acceleration, set B (counts) trace 4 ground force, estimated, from accelerometer " &
+      "set B" in cards, cards
+
   block unwritable:
     doAssertRaises(CatchableError):
       s.writeSegy(dir / "no" / "such" / "folder" / "x.sgy")

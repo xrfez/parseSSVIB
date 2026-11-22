@@ -7,8 +7,9 @@
 ## derived trace. Samples are written exactly as recorded and no option changes a
 ## sign.
 ##
-## **Traces**, in this order: the chosen channels in file order, then the two
-## per-cycle values (when asked), then the computed ground forces. The set that
+## **Traces**, in `traceOrder` (default `voFile`): the chosen channels in file order,
+## then the two per-cycle values (when asked), then the computed ground forces; or
+## `voForces`, the roles in the `.dat` file's order (see `VibTraceOrder`). The set that
 ## `primary` names (B by default: the one the `.dat` file records) gets the standard
 ## codes; every other column gets 256 plus its column number, a code that is "optional
 ## use" in Rev 1 and Rev 2 alike.
@@ -67,6 +68,14 @@ type
     vuCounts   ## raw counts, as recorded (default)
     vuPhysical ## pounds-force, g and percent, by `scaleOf` (needs `VibWriteOptions.scale`)
 
+  VibTraceOrder* = enum
+    voFile ## the channels in file order, then the per-cycle values, then the ground forces
+    voForces
+      ## by role: the reference; the primary set's reaction-mass acceleration, baseplate
+      ## acceleration and ground force; the other set's the same three; torque motor,
+      ## valve, mass displacement, drive; the per-cycle values. A trace that is not
+      ## chosen is left out and the rest keep their order.
+
   VibTimeAxis* = enum
     vaTrigger
       ## t = 0 at the trigger frame: sample 0 is at minus the trigger frame times the
@@ -86,6 +95,10 @@ type
       ## `vuPhysical`, else in pound-counts.
     primary*: VibSet = vsB ## the set that gets the standard codes 19, 18 and 20
     timeAxis*: VibTimeAxis = vaTrigger
+    traceOrder*: VibTraceOrder = voFile
+      ## The order of the traces in the file. Trace codes, SEG-D channel numbers and
+      ## samples follow their column; only the SEG-Y trace number (the position) moves.
+      ## `externalConverter` has its own order and ignores this.
     removeMean*: bool = false ## subtract each written column's mean (before scaling)
     record*: int64 = -1 ## the record number: -1 is the file name's number, else 1
     controllerSerial*: int64 = -1 ## the controller's serial, for the text header; -1 none
@@ -250,21 +263,40 @@ proc plan(s: VibShot; opts: VibWriteOptions; segd: bool): seq[TracePlan] =
       result[i].code = ConverterCodes[i]
       result[i].segd = sctSourceOther
   else:
+    var channels: array[VibChannel, TracePlan]
     for c in VibChannel:
-      if c in opts.channels:
-        result.add TracePlan(kind: tkChannel, channel: c,
-          code: segyTraceCode(c, opts.primary),
-          segd: segdChannelType(c, opts.primary, opts.segdReference), name: $c)
+      channels[c] = TracePlan(kind: tkChannel, channel: c,
+        code: segyTraceCode(c, opts.primary),
+        segd: segdChannelType(c, opts.primary, opts.segdReference), name: $c)
+    var cycles: seq[TracePlan] = @[]
     if opts.cycleValues:
       for v in VibCycleValue:
-        result.add TracePlan(kind: tkCycle, cycle: v, code: segyTraceCode(v),
+        cycles.add TracePlan(kind: tkCycle, cycle: v, code: segyTraceCode(v),
           segd: sctSourceOther, name: $v)
-    for which in [opts.primary, (if opts.primary == vsA: vsB else: vsA)]:
-      if which in opts.groundForce:
-        result.add TracePlan(kind: tkGround, which: which,
-          code: segyGroundForceCode(which, opts.primary),
-          segd: (if which == opts.primary: sctSourceSigEstimated else: sctSourceOther),
-          name: "ground force, estimated, from accelerometer set " & $which)
+    var grounds: array[VibSet, TracePlan]
+    for which in VibSet:
+      grounds[which] = TracePlan(kind: tkGround, which: which,
+        code: segyGroundForceCode(which, opts.primary),
+        segd: (if which == opts.primary: sctSourceSigEstimated else: sctSourceOther),
+        name: "ground force, estimated, from accelerometer set " & $which)
+    let other = if opts.primary == vsA: vsB else: vsA
+    case opts.traceOrder
+    of voFile:
+      for c in VibChannel:
+        if c in opts.channels: result.add channels[c]
+      result.add cycles
+      for which in [opts.primary, other]:
+        if which in opts.groundForce: result.add grounds[which]
+    of voForces:
+      if vcReference in opts.channels: result.add channels[vcReference]
+      for which in [opts.primary, other]:
+        let (bp, rm) = if which == vsA: (vcBaseplateA, vcMassA) else: (vcBaseplateB, vcMassB)
+        if rm in opts.channels: result.add channels[rm]
+        if bp in opts.channels: result.add channels[bp]
+        if which in opts.groundForce: result.add grounds[which]
+      for c in [vcTorqueMotor, vcValve, vcMassStroke, vcDrive]:
+        if c in opts.channels: result.add channels[c]
+      result.add cycles
 
 proc checkOptions(s: VibShot; opts: VibWriteOptions; segd: bool; major = 1) =
   ## Everything that makes a shot or the options unwritable, said in our words.
