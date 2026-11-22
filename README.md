@@ -61,14 +61,34 @@ let path = shot.writeSegyTo("out", serial = 42)  # out/0042_20010203T040506Z_vib
 | Trigger | estimated from the reference (needs a linear sweep with its phase origin at the trigger; a pulse or a non-linear sweep gives none) | `findTrigger`, `setTrigger(shot, time, frame)` |
 | Time axis | t = 0 at the trigger frame, pre-trigger negative | `VibWriteOptions.timeAxis = vaRecord`: all frames from the first, t = 0 at the first |
 | Clock time | the second the recording began | `setTrigger` with the exact trigger time (from the `.dat` file of the sweep) |
-| Controller serial | not in the file | `serial` of `writeSegyTo` / `writeSegdTo`, `VibWriteOptions.controllerSerial`; `serialFromPath` reads it from the folder layout `<serial>/<date>/NNNN.VIB` |
+| Controller serial | not in the file | `serial` of `writeSegyTo` / `writeSegdTo`, `VibWriteOptions.controllerSerial`; `serialFromPath` reads it from the folder layout `<serial>/<date>/NNNN.VIB` (a folder named by exactly four digits) |
 | File stem | `0042_20010203T040506Z_vib` (the start second); with the exact trigger known `0042_20010203T040506.789000000Z_vib` (the `.dat` stem plus `_vib`) | `vibFileStem` |
 | Units | raw counts | `VibWriteOptions.units = vuPhysical` with `scale` (all constants are the caller's) |
 | External converter's 13 traces | off | `VibWriteOptions.externalConverter` with `scale` and `converterCut` (no built-in values; SEG-Y Rev 1 only) |
 
-The time of sample 0 is minus the trigger frame times the interval; SEG-Y keeps the
-fraction of a millisecond, SEG-D the microsecond. `triggerWindow` gives the POSIX seconds
-a paired `.dat` file's trigger must lie in.
+The time of sample 0 is minus the trigger frame times the interval. What a file holds
+of it: SEG-Y Rev 1 and Rev 2 store it as a 16-bit delay with a scalar, in steps of
+0.01 ms up to 327.67 ms of pre-trigger and 0.1 ms beyond (a trigger frame above 655 at
+500 us), so the stored time is up to 0.05 ms (0.1 frame) off; Rev 0 stores whole
+milliseconds (up to 0.5 ms off); SEG-D stores microseconds. The text header holds the
+exact trigger frame (three decimals) and says where it came from. `triggerWindow` gives
+the POSIX seconds a paired `.dat` file's trigger must lie in.
+
+The trigger estimate comes with `triggerSigmaFrames`, the fit's formal error. It does not
+include a constant offset of up to about 0.02 frames that a controller's reference can
+have against the trigger: the scatter to expect is wider than the stated sigma. The fit
+assumes a clean reference at full scale and a sweep of a few hundred crossings; a short
+logarithmic sweep can pass its checks and still be a few frames off.
+
+**SEG-Y Rev 0** knows trace codes 1 to 8 only. The writers keep the codes in the file
+anyway (the traces' status is unknown, which parseSEG then writes together with the
+code), but a reader that checks codes against Rev 0 sees codes above 8 as undefined; the
+delay is whole milliseconds, and `externalConverter` is refused.
+
+**SEG-D** writes one channel set per channel type, and several traces share a type
+(0x97 is used for the second accelerometer set, torque motor, mass displacement and the
+per-cycle values), so a reader that goes by sets sees the traces grouped by type. The
+channel number of each trace (1, 2, ... in the order written) identifies the column.
 
 ## Many files
 

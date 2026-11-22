@@ -83,7 +83,7 @@ func daysInMonth(y, m: int): int =
   else: 31
 
 func validTime(t: VibTime): bool =
-  ## A real date and time of day: years 1970 to 9999, a second up to 60.
+  ## A valid date and time of day: years 1970 to 9999, a second up to 60.
   t.year in 1970 .. 9999 and t.month in 1 .. 12 and
     t.day in 1 .. daysInMonth(t.year, t.month) and t.hour in 0 .. 23 and
     t.minute in 0 .. 59 and t.second in 0 .. 60 and t.nanosecond in 0 .. 999_999_999

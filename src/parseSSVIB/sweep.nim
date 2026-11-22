@@ -19,7 +19,7 @@ const
   MinCrossings* = 200       ## a reference with fewer zero crossings gives no estimate
   MaxResidualCycles* = 0.05 ## a larger phase residual of any crossing gives none
   TailFrames* = 40          ## `endsInSweep` looks at this many last frames
-  MinIntervalUs* = 0.01 ## a smaller interval gives no fit
+  MinIntervalUs* = 0.01     ## a smaller interval gives no fit
   NewtonSteps = 60
 
 template eachCrossing(x: openArray[int16]; z, body: untyped) =
