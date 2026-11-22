@@ -156,17 +156,12 @@ func digitsValue(t: string): int64 =
 
 func serialFromPath*(path: string): int64 =
   ## The number in the name of the folder two levels above the file, for the layout
-  ## controllers' folders have (`<serial>/<date>/NNNN.VIB`): a folder `NNNN`, or
-  ## `NN_NNNN` (the number after the underscore). -1 when the folder is named
-  ## otherwise. A convenience: the caller decides what the serial is.
+  ## controllers' folders have (`<serial>/<date>/NNNN.VIB`): a folder named by exactly
+  ## four digits. -1 when the folder is named otherwise (a year folder `2023` is four
+  ## digits too: the caller checks the layout). A convenience: the caller decides what
+  ## the serial is.
   let folder = splitPath(splitPath(splitPath(path).head).head).tail
-  result = digitsValue(folder)
-  if result < 0:
-    let us = folder.find('_')
-    if us > 0:
-      result = digitsValue(folder[us + 1 .. ^1])
-      if digitsValue(folder[0 ..< us]) < 0:
-        result = -1
+  if folder.len == 4 and folder.allCharsInSet(Digits): digitsValue(folder) else: -1
 
 func nameNumberOf*(path: string): int64 =
   ## The digits of a `NNNN.VIB` file name (1 to 9 digits; the extension in any case),
@@ -290,7 +285,7 @@ proc parseVibInfo*(head: openArray[byte]; fileSize: int64;
   ## a header cut short or a file without a frame, and `ValueError` for a bad
   ## interval or a `head` too short.
   checkInterval(sampleIntervalUs)
-  if head.len < int(min(fileSize, int64(VibHeaderBytes))):
+  if int64(head.len) < min(fileSize, int64(VibHeaderBytes)):
     raise newException(ValueError, "the first bytes of the file are missing")
   result = VibInfo()
   fillInfo(result, head, fileSize, sampleIntervalUs, false)

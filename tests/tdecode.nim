@@ -370,6 +370,30 @@ proc main*() =
       sameShot(shot, readVib(dir / name))
     doAssert shot.nameNumber == 2
 
+  block nameNumberReset:
+    ## A shot that was read from a file named by a number forgets it in the next decode
+    ## of bytes (a number that is not the name of a file).
+    let dir = getTempDir() / ("ssvib-tdecode-name-" & $getCurrentProcessId())
+    createDir(dir)
+    defer: removeDir(dir)
+    writeFile(dir / "0077.VIB", cast[string](synthVib(SynthVib(afterTrigger: 20))))
+    var shot = readVib(dir / "0077.VIB")
+    doAssert shot.nameNumber == 77
+    decodeInto(shot, synthVib(SynthVib(afterTrigger: 20)))
+    doAssert shot.nameNumber == -1
+
+  block lyingSize:
+    ## A size that does not fit an `int` (32-bit) or is negative is refused with words,
+    ## never a range error.
+    let head = synthVib(SynthVib(afterTrigger: 20))[0 ..< 47]
+    for size in [-3_000_000_000'i64, -1'i64, low(int64), 0'i64]:
+      doAssertRaises(VibFormatError):
+        discard parseVibInfo(head, size)
+    doAssertRaises(ValueError): # a head shorter than the size needs
+      discard parseVibInfo(head[0 ..< 10], 1000'i64)
+    doAssertRaises(VibFormatError):
+      discard parseVibInfo(head, high(int64))
+
   block findTrigger:
     let d = synthVib(SynthVib(preTrigger: 650.25))
     let on = parseVib(d)
@@ -464,11 +488,11 @@ proc main*() =
       doAssert nameNumberOf(bad) == -1, bad
     doAssert serialFromPath("root/Data/0042/05-06-07/0001.VIB") == 42
     doAssert serialFromPath("0042/05-06-07/0001.VIB") == 42
-    doAssert serialFromPath("root/12_0042/05-06-07/0001.VIB") == 42
-    doAssert serialFromPath("root/12_0042/05-06-07/0001.VIB") == 42
+    doAssert serialFromPath("root/0000/05-06-07/0001.VIB") == 0
     for bad in ["0001.VIB", "05-06-07/0001.VIB", "root/abcd/05-06-07/0001.VIB",
-        "root/ab_0042/05-06-07/0001.VIB", "root/12_/05-06-07/0001.VIB", "",
-        "root/12345678901/05-06-07/0001.VIB", "root/_5/x/0001.VIB"]:
+        "root/12_0042/05-06-07/0001.VIB", "", "root/12345678901/05-06-07/0001.VIB",
+        "root/_5/x/0001.VIB", "root/42/05-06-07/0001.VIB", "root/00042/05-06-07/0001.VIB",
+        "root/12345/x/0001.VIB", "root/+042/x/0001.VIB"]:
       doAssert serialFromPath(bad) == -1, bad
 
   block endsInSweepFlag:
