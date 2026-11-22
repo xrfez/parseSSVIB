@@ -94,12 +94,16 @@ proc main*() =
     let wn = fitSweep(noise)
     doAssert wn.crossings > 200 and not wn.valid
     # intervals that are not positive and finite: invalid, not an exception
-    for bad in [0.0, -500.0, NaN, Inf]:
+    for bad in [0.0, -500.0, NaN, Inf, 1e-300, 0.005]:
       isNone fitSweep(synthRef(SynthVib()), bad)
+    doAssert fitSweep(synthRef(SynthVib()), MinIntervalUs).valid
 
   block zeroSamples:
     ## Crossings: a sign change between two frames; a zero counts as non-negative.
-    doAssert fitSweep(@[int16 -1, 0, 0, -1]).crossings == 2
+    doAssert fitSweep(@[int16 -1, 0, 0, -1]).crossings == 1 # the second is no crossing:
+    # no positive sample came before the change to negative
+    doAssert fitSweep(@[int16 0, 0, -5, 5, -5]).crossings == 2 # a zero run, then negative
+    doAssert fitSweep(@[int16 3, 0, -1]).crossings == 1 # after a positive sample it counts
     doAssert fitSweep(@[int16 1, 0, 0, 1]).crossings == 0
     doAssert fitSweep(@[int16 1, -1, 1, -1, 1]).crossings == 4
     doAssert fitSweep(@[int16 -32768, 32767, -32768]).crossings == 2
@@ -109,6 +113,26 @@ proc main*() =
     for i in 0 ..< alt.len:
       alt[i] = if i mod 2 == 0: 1 else: -1
     doAssert fitSweep(alt).crossings == 399
+    # the phase origin of a constant 1000 Hz tone lies before frame 0: no trigger
+    let tone = fitSweep(alt)
+    doAssert not tone.valid and tone.residualCycles < 1e-9 and tone.triggerFrame.isNaN
+
+  block negativeStart:
+    ## A reference that starts negative (the sign of the recording) gives the same
+    ## trigger and start frequency as one that starts positive.
+    for (pre, f0, rate) in [(600.37, 6.0, 8.0), (600.37, 8.0, 8.0), (600.37, 20.0, 30.0)]:
+      let syn = SynthVib(preTrigger: pre, startHz: f0, rateHzPerS: rate,
+        afterTrigger: (if f0 < 10: 12000 else: 6000))
+      let pos = synthRef(syn)
+      var neg = pos
+      for x in neg.mitems:
+        x = -x
+      let a = fitSweep(pos)
+      let b = fitSweep(neg)
+      doAssert a.valid and b.valid, $(f0, b)
+      doAssert abs(b.triggerFrame - pre) < 0.02, $(f0, b.triggerFrame)
+      doAssert abs(b.startHz - f0) < 0.001 and abs(b.rateHzPerS - rate) < 0.001
+      doAssert abs(b.triggerFrame - a.triggerFrame) < 0.01 and b.crossings == a.crossings
 
   block taperStart:
     ## A reference that is zero before the trigger and tapers in: the first half-cycle

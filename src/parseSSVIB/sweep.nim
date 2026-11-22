@@ -19,16 +19,21 @@ const
   MinCrossings* = 200       ## a reference with fewer zero crossings gives no estimate
   MaxResidualCycles* = 0.05 ## a larger phase residual of any crossing gives none
   TailFrames* = 40          ## `endsInSweep` looks at this many last frames
+  MinIntervalUs* = 0.01 ## a smaller interval gives no fit
   NewtonSteps = 60
 
 template eachCrossing(x: openArray[int16]; z, body: untyped) =
   ## Runs `body` for every zero crossing of `x` with `z` the crossing's position in
   ## frames: a sign change between two frames, linearly interpolated; a zero sample
-  ## counts as non-negative.
+  ## counts as non-negative. The jump from the zero run before the trigger to a
+  ## reference that starts negative is no crossing: a change from non-negative to
+  ## negative counts only once a positive sample has been seen.
+  var started = false
   for i in 1 ..< x.len:
     let a = int(x[i - 1])
     let b = int(x[i])
-    if (a < 0) != (b < 0):
+    if a > 0: started = true
+    if (a < 0) != (b < 0) and (started or a < 0):
       let z = float64(i - 1) + float64(a) / float64(a - b)
       body
 
@@ -62,9 +67,17 @@ func fitSweep*(reference: openArray[int16]; intervalUs = 500.0): VibSweep =
   ## most `MaxResidualCycles`, an increasing phase and a root between frame 0 and
   ## the first crossing; otherwise `valid` is false and the numbers are NaN (`crossings`
   ## and the residuals are kept when they were found). A reference that starts with
-  ## a negative half-cycle counts the jump from zero before it as a crossing and
-  ## gives a trigger half a cycle early: the controllers seen start positive. Never
-  ## raises: an interval that is not positive and finite gives an invalid fit.
+  ## a negative half-cycle is fitted like one that starts positive.
+  ##
+  ## Assumptions: a clean reference at full scale (the controllers seen have a few
+  ## counts of noise at most, and a reference with more noise near zero makes extra
+  ## crossings that break the count, so the fit is then refused or wrong), and a
+  ## sweep that is long enough: a short logarithmic sweep can pass the residual limit
+  ## and still put the trigger a few frames off. `triggerSigmaFrames` is the fit's
+  ## formal error. It does not include a constant offset of up to about 0.02 frames
+  ## that a controller's reference can have against the trigger, so the actual scatter
+  ## is wider than the stated sigma. Never raises: an interval that is not finite,
+  ## below 0.01 us or not positive gives an invalid fit.
   result = VibSweep()
   var count = 0
   var first = 0.0
@@ -74,7 +87,7 @@ func fitSweep*(reference: openArray[int16]; intervalUs = 500.0): VibSweep =
     last = z
     inc count
   result.crossings = count
-  if count < MinCrossings or not (intervalUs > 0 and intervalUs < Inf):
+  if count < MinCrossings or not (intervalUs >= MinIntervalUs and intervalUs < Inf):
     return
   let mid = (first + last) / 2
   let half = max((last - first) / 2, 1.0)
@@ -127,7 +140,7 @@ func fitSweep*(reference: openArray[int16]; intervalUs = 500.0): VibSweep =
       break
   slope = c[1] + 2 * c[2] * u
   let trigger = mid + u * half
-  if not (slope > 0 and u < -1 and trigger >= 0 and trigger <= first):
+  if not (slope > 0 and u < -1 and trigger >= 0):
     return
   let hz = 1e6 / intervalUs # frames per second
   result.valid = true
