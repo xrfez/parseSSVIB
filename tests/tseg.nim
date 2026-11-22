@@ -758,7 +758,7 @@ proc main*() =
     ## Rev 0 knows trace codes 1 to 8 only: the codes still reach the file (the status is
     ## unknown, so parseSEG keeps them), the time of sample 0 is a whole ms.
     let zeroRev = SegyOutputOptions(revision: SegyRevision(major: 0, minor: 0))
-    s.writeSegy(dir / "r0.sgy", zeroRev)
+    s.writeSegy(dir / "r0.sgy", zeroRev, VibWriteOptions(vendorLayout: false))
     var f = openSeismic(dir / "r0.sgy", keys = true)
     let expected = [21'i16, 257, 258, 19, 18, 261, 262, 263, 264, 20]
     doAssert f.len == 10

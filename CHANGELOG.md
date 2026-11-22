@@ -30,3 +30,14 @@
   roles in the order of a `.dat` file's channels (reference, reaction mass, baseplate and
   ground force of the primary set, then the other set's, hydraulics and drive, per-cycle
   values).
+- The shot block (`VibWriteOptions.vendorLayout`, on by default): every value of the
+  record that is not a sample goes into the file as a 1280-byte block (`shotBlock`), as
+  the binary stanza `parseSSVIB:Shot v1` in SEG-Y (card 37 names it) and as the record's
+  external header in SEG-D, with a table of the traces written and the file's header
+  verbatim. `addShotBlock` and `withVibShotCard` serve a writer of many shots;
+  `VibWriteOptions.datFileNumber` writes the number of the paired `.dat` file as given.
+  The vendor maps `parseSSVIB-segy-1` and `parseSSVIB-segd-1` in `vendormaps/` decode it
+  by field name through parseSEG. SEG-Y Rev 0 has no stanzas: `writeSegy` refuses it with
+  the layout (set `vendorLayout` to false).
+- `writeSegdTo` passes the serial to the text and the block, as `writeSegyTo` does.
+- Needs parseSEG 0.19.1.

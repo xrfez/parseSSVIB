@@ -64,6 +64,8 @@ let path = shot.writeSegyTo("out", serial = 42)  # out/0042_20010203T040506Z_vib
 | Controller serial | not in the file | `serial` of `writeSegyTo` / `writeSegdTo`, `VibWriteOptions.controllerSerial`; `serialFromPath` reads it from the folder layout `<serial>/<date>/NNNN.VIB` (a folder named by exactly four digits) |
 | File stem | `0042_20010203T040506Z_vib` (the start second); with the exact trigger known `0042_20010203T040506.789000000Z_vib` (the `.dat` stem plus `_vib`) | `vibFileStem` |
 | Units | raw counts | `VibWriteOptions.units = vuPhysical` with `scale` (all constants are the caller's) |
+| Paired `.dat` file number | not in the file | `VibWriteOptions.datFileNumber` (written as given, never looked up) |
+| Shot block in the file | written | `VibWriteOptions.vendorLayout` |
 | External converter's 13 traces | off | `VibWriteOptions.externalConverter` with `scale` and `converterCut` (no built-in values; SEG-Y Rev 1 only) |
 
 The time of sample 0 is minus the trigger frame times the interval. What a file holds
@@ -103,6 +105,46 @@ delay is whole milliseconds, and `externalConverter` is refused.
 (0x97 is used for the second accelerometer set, torque motor, mass displacement and the
 per-cycle values), so a reader that goes by sets sees the traces grouped by type. The
 channel number of each trace (1, 2, ... in the order written) identifies the column.
+
+## The shot block: every value of the record, inside the file
+
+With `VibWriteOptions.vendorLayout` (on by default) a SEG-Y or SEG-D file carries one
+1280-byte **shot block** per record: every value of the record that is not a sample.
+That is the decoded frame count, trigger and sweep fit, the time of t = 0, what you
+supplied (record number, controller serial, the paired `.dat` file number, the trigger
+time), the options the traces were written with, a table of the traces written (what
+each is, its codes and unit, and the factor and mean that turn the counts into the
+written samples) and the file's 47 header bytes, verbatim.
+
+- **SEG-Y:** one binary stanza `parseSSVIB:Shot v1` per shot in the extended textual
+  header (Rev 1 and later; Rev 0 has none and `writeSegy` refuses it with the layout on).
+  Card 37 of the textual header reads `PARSESSVIB SHOT STANZAS VERSION 1 (MAP
+  PARSESSVIB-SEGY-1)`, which is how the map finds the file.
+- **SEG-D:** the record's external header, 40 blocks of 32 bytes, starting with the magic
+  `SSVIBSHT`.
+- The traces and the standard header fields are the same with the layout on or off;
+  `vendorLayout = false` writes the plain file only.
+- `shotBlock(shot, opts)` gives the block. For a SEG-Y writer of several shots, call
+  `addShotBlock` for every shot before the first trace and open the writer with
+  `withVibShotCard(cards)` as its text header; `writeSegdTraces` passes the block itself.
+- What "unknown" looks like: an integer that was not given (the file name's number, the
+  serial, the `.dat` file number) is 0xFFFFFFFF and the map leaves it out; a float is NaN;
+  the trigger date and time are absent when `triggerKnown` is 0. The words of
+  `incompleteWhy` are cut at the last space within 76 characters.
+- The block is big-endian whatever the SEG-Y byte order; the header inside it is the
+  file's own bytes, little-endian, decoded in place. The four constants of `scale` are
+  written as you gave them (NaN when not given).
+- `datFileNumber` is written as you give it and never looked up. A value the block cannot
+  hold (a number above 32 bits, a trigger time out of range) is refused with
+  `VibWriteError` while `vendorLayout` is on.
+- The maps that decode the block by field name are in `vendormaps/` (see its README):
+  `parseSSVIB-segy-1.nif` and `parseSSVIB-segd-1.nif`. Load them into parseSEG's vendor
+  maps (`PARSESEG_VENDOR_PATH`, or `loadVendorMaps`), and `decodeVendorAreas` returns the
+  block `parseSSVIBShot` with its fields (`record`, `triggerFrame`, `traceCode[0]`, ...).
+- The polarity is as recorded; a block never holds a flipped sign, and the table says how
+  each sample was made from the counts.
+
+Needs parseSEG 0.19.1 or later.
 
 ## Many files
 

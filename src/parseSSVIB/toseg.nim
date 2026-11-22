@@ -31,6 +31,20 @@
 ## caller gave it (`setTrigger`), else the second the recording began, which the
 ## text header says. The `.vib` has no position, line or station: none is written.
 ##
+## **The shot block.** With `vendorLayout` (the default) every value of the record that
+## is not a sample goes into the file too, as a 1280-byte block (`shotBlock`): in SEG-Y
+## the binary stanza `parseSSVIB:Shot v1` of the extended textual header (card 37
+## says so: `VibShotCardText`), in SEG-D the record's external header. It holds the
+## decoded values (frame count, trigger and sweep fit, the time of t = 0), what the
+## caller supplied (record, controller serial, paired `.dat` file number, trigger
+## time), the options, a table of the traces written with the factor and mean that
+## turn the counts into the samples, and the file's 47 header bytes verbatim. The vendor
+## maps in `vendormaps/` decode it by field name through parseSEG. The traces are the
+## same with the layout on or off; SEG-Y Rev 0 has no stanzas, so `writeSegy` refuses
+## it with the layout. The block is big-endian, the header inside it the file's own
+## bytes; polarity is as recorded. `addShotBlock` and `withVibShotCard` serve a writer
+## of many shots.
+##
 ## **Errors.** A value the format cannot hold or an option that makes no sense raises
 ## `VibWriteError` with plain words: a constant a physical trace needs and the caller
 ## did not give, a record number SEG-D cannot hold, an interval that is not a whole
@@ -59,6 +73,23 @@ const
   MaxSegyRecord = 2_147_483_647 ## the field is 32 bits
   MaxIntervalUs = 65535.0       ## the SEG-Y sample interval field is 16 bits
   ConverterCodes = [21'i16, 19, 18, 20, 29, 28, 30, 33, 34, 35, 36, 1, 1]
+  ShotLayoutVersion = 1
+  RecognitionCard = 37          ## the textual header card that names the shot stanza
+  MaxTextCards = 38
+  MaxTableTraces = 16           ## slots of the shot block's trace table
+  TableAt = 320                 ## 0-based offset of the trace table
+  TableEntryBytes = 48
+  HeaderAt = 256                ## 0-based offset of the file's 47 header bytes
+  WhyAt = 1088
+  WhyBytes = 76
+  None32 = 4_294_967_295'i64    ## the block's "none" for a 32-bit number
+
+const
+  VibShotCardText* = "PARSESSVIB SHOT STANZAS VERSION 1 (MAP PARSESSVIB-SEGY-1)"
+    ## Card 37 of a SEG-Y file written with `vendorLayout`: what the vendor map
+    ## `parseSSVIB-segy-1` recognises the file by.
+  VibShotBlockBytes* = 1280 ## the size of the shot block (40 SEG-D blocks of 32 bytes)
+  VibShotMagic* = "SSVIBSHT" ## its first eight bytes, which the SEG-D map recognises it by
 
 type
   CloseDiagnostics = object of IOError
@@ -115,6 +146,16 @@ type
       ## computed in pounds-force from the weights as the converter does. SEG-Y Rev 1
       ## only: codes 28 to 36 mean electromagnetic data in Rev 2.
     converterCut*: int = -1 ## frames the converter drops from the start (no built-in value)
+    vendorLayout*: bool = true
+      ## Write every value of the record that is not a sample into the file as a shot
+      ## block (`shotBlock`): in SEG-Y one binary stanza `parseSSVIB:Shot v1` in the
+      ## extended textual header, found by card 37; in SEG-D the record's external
+      ## header. False writes the plain file (the same traces). SEG-Y Rev 0 has no
+      ## stanzas: `writeSegy` refuses it with `vendorLayout`.
+    datFileNumber*: int64 = -1
+      ## The file number of the `.dat` file of the same sweep, when the caller paired
+      ## them: written into the block and the text header as given, never looked up.
+      ## -1: not paired.
 
   TraceKind = enum
     tkChannel
@@ -298,6 +339,91 @@ proc plan(s: VibShot; opts: VibWriteOptions; segd: bool): seq[TracePlan] =
         if c in opts.channels: result.add channels[c]
       result.add cycles
 
+type
+  TraceUnit = enum
+    tuCounts = "counts"
+    tuPoundCounts = "pound-counts"
+    tuLbf = "lbf"
+    tuG = "g"
+    tuPercent = "percent"
+    tuAsStored = "as stored"
+    tuUnknown = "unit unknown"
+
+func unitOf(p: TracePlan; opts: VibWriteOptions): TraceUnit =
+  let physical = opts.units == vuPhysical or opts.externalConverter
+  if not physical:
+    return (if p.kind == tkGround: tuPoundCounts else: tuCounts)
+  case p.kind
+  of tkCycle: tuAsStored
+  of tkGround: tuLbf
+  of tkChannel:
+    case p.channel
+    of vcReference: tuLbf
+    of vcBaseplateA, vcMassA, vcBaseplateB, vcMassB:
+      if opts.force or opts.externalConverter: tuLbf else: tuG
+    of vcTorqueMotor, vcValve, vcMassStroke: tuPercent
+    of vcDrive: tuUnknown
+
+func columnsOf(p: TracePlan): tuple[a, b: VibChannel] =
+  ## The baseplate and reaction-mass channels of a ground force trace.
+  if p.which == vsA: (vcBaseplateA, vcMassA) else: (vcBaseplateB, vcMassB)
+
+type Factors = tuple[f, m, f2, m2: float64]
+
+proc factorsOf(s: VibShot; p: TracePlan; opts: VibWriteOptions): Factors =
+  ## What turns the counts of trace `p` into its samples: `f * (c - m)` for a column
+  ## `c`, `f * (bp - m) + f2 * (rm - m2)` for a ground force; `f2` and `m2` are NaN for a
+  ## column.
+  let first = if opts.externalConverter: opts.converterCut else: 0
+  let removeMean = opts.removeMean or opts.externalConverter
+  let physical = opts.units == vuPhysical or opts.externalConverter
+  result = (1.0, 0.0, NaN, NaN)
+  case p.kind
+  of tkChannel:
+    if removeMean: result.m = meanOf(s.data[p.channel], first)
+    if physical:
+      result.f = scaleOf(s, p.channel, opts.scale, opts.force or opts.externalConverter)
+  of tkCycle:
+    if removeMean: result.m = meanOf(s.cycle[p.cycle], first)
+  of tkGround:
+    let (bp, rm) = columnsOf(p)
+    result.m = if removeMean: meanOf(s.data[bp], first) else: 0.0
+    result.m2 = if removeMean: meanOf(s.data[rm], first) else: 0.0
+    # the weights, in pounds-force per count when physical, else the plain weights
+    result.f = if physical: scaleOf(s, bp, opts.scale, true) else: float64(s.header.baseplateLb)
+    result.f2 = if physical: scaleOf(s, rm, opts.scale, true) else: float64(s.header.massLb)
+
+func incompleteWords(why: string): string =
+  ## `why` cut at the last space within 76 characters: the room the block has.
+  if why.len <= WhyBytes:
+    result = why
+  else:
+    let at = why.rfind(' ', 0, WhyBytes)
+    result = if at > 0: why[0 ..< at] else: why[0 ..< WhyBytes]
+
+proc checkBlockFields(s: VibShot; opts: VibWriteOptions) =
+  ## The shot block holds 32-bit fields, a trigger time in bytes and a table of 16
+  ## traces: refuse what does not fit, in words, rather than write a wrapped number.
+  const hint = " (set vendorLayout to false to write the file without it)"
+  for (name, v) in [("record number", recordOf(s, opts)), ("frame count", int64(s.len)),
+      ("converter cut", int64(if opts.externalConverter: opts.converterCut else: 0)),
+      ("tail", int64(s.tailBytes))]:
+    if v < 0 or v > None32:
+      fail(s, "the " & name & " " & $v & " does not fit the 32 bits of the shot block" & hint)
+  for (name, v) in [("name number", s.nameNumber), ("controller serial", opts.controllerSerial),
+      ("paired .dat file number", opts.datFileNumber)]:
+    if v != -1 and (v < 0 or v >= None32):
+      fail(s, "the " & name & " " & $v & " is not -1 or between 0 and " & $(None32 - 1) &
+        ", which the shot block holds" & hint)
+  if s.triggerKnown:
+    let t = s.trigger
+    if t.year notin 0 .. 65535 or t.month notin 0 .. 255 or t.day notin 0 .. 255 or
+        t.hour notin 0 .. 255 or t.minute notin 0 .. 255 or t.second notin 0 .. 255 or
+        t.nanosecond notin 0 .. 999_999_999:
+      fail(s, "the trigger time " & $t & " does not fit the shot block" & hint)
+  if plan(s, opts, false).len > MaxTableTraces:
+    fail(s, "the shot block's trace table holds " & $MaxTableTraces & " traces" & hint)
+
 proc checkOptions(s: VibShot; opts: VibWriteOptions; segd: bool; major = 1) =
   ## Everything that makes a shot or the options unwritable, said in our words.
   if s.len == 0:
@@ -314,6 +440,8 @@ proc checkOptions(s: VibShot; opts: VibWriteOptions; segd: bool; major = 1) =
     fail(s, "the sample interval " & $s.sampleIntervalUs & " us is not positive")
   if opts.record < -1:
     fail(s, "the record number " & $opts.record & " is negative")
+  if opts.datFileNumber < -1:
+    fail(s, "the paired .dat file number " & $opts.datFileNumber & " is negative")
   if s.hasTrigger and not (s.triggerFrame >= 0 and s.triggerFrame <= float64(s.len)):
     fail(s, "the trigger frame " & $s.triggerFrame & " is outside the shot's " &
       $s.len & " frames")
@@ -372,6 +500,8 @@ proc checkOptions(s: VibShot; opts: VibWriteOptions; segd: bool; major = 1) =
     if recordOf(s, opts) > MaxSegdFileNumber:
       fail(s, "the record number " & $recordOf(s, opts) & " is above " &
         $MaxSegdFileNumber & ", the most SEG-D can number")
+  if opts.vendorLayout:
+    checkBlockFields(s, opts)
 
 proc outTraces(s: VibShot; opts: VibWriteOptions; segd, exactTime: bool;
     major = 1): seq[OutTrace] =
@@ -379,42 +509,144 @@ proc outTraces(s: VibShot; opts: VibWriteOptions; segd, exactTime: bool;
   result = @[]
   let first = if opts.externalConverter: opts.converterCut else: 0
   let n = s.len - first
-  let removeMean = opts.removeMean or opts.externalConverter
-  let physical = opts.units == vuPhysical or opts.externalConverter
   let clock = clockOfZero(s, opts)
   var number = 0
   for p in plan(s, opts, segd):
     inc number
-    var values = newSeq[float64](n)
+    let (f, m, f2, m2) = factorsOf(s, p, opts)
+    var v = newSeq[float32](n)
     case p.kind
     of tkChannel:
-      let m = if removeMean: meanOf(s.data[p.channel], first) else: 0.0
-      let f = if physical: scaleOf(s, p.channel, opts.scale,
-        opts.force or opts.externalConverter) else: 1.0
       for i in 0 ..< n:
-        values[i] = f * (float64(s.data[p.channel][first + i]) - m)
+        v[i] = float32(f * (float64(s.data[p.channel][first + i]) - m))
     of tkCycle:
-      let m = if removeMean: meanOf(s.cycle[p.cycle], first) else: 0.0
       for i in 0 ..< n:
-        values[i] = float64(s.cycle[p.cycle][first + i]) - m
+        v[i] = float32(f * (float64(s.cycle[p.cycle][first + i]) - m))
     of tkGround:
-      let (bp, rm) = if p.which == vsA: (vcBaseplateA, vcMassA) else: (vcBaseplateB, vcMassB)
-      let mb = if removeMean: meanOf(s.data[bp], first) else: 0.0
-      let mm = if removeMean: meanOf(s.data[rm], first) else: 0.0
-      # the weights, in pounds-force per count when physical, else the plain weights
-      let wb = if physical: scaleOf(s, bp, opts.scale, true) else: float64(s.header.baseplateLb)
-      let wm = if physical: scaleOf(s, rm, opts.scale, true) else: float64(s.header.massLb)
+      let (bp, rm) = columnsOf(p)
       for i in 0 ..< n:
-        values[i] = wb * (float64(s.data[bp][first + i]) - mb) +
-          wm * (float64(s.data[rm][first + i]) - mm)
+        v[i] = float32(f * (float64(s.data[bp][first + i]) - m) +
+          f2 * (float64(s.data[rm][first + i]) - m2))
     var k = toTraceKeys(s, p.code, number, opts, first, major)
     if segd: k.status = tsAuxiliary
     if exactTime:
       k.time = float64(clock.seconds)
-    var v = newSeq[float32](n)
-    for i in 0 ..< n:
-      v[i] = float32(values[i])
     result.add OutTrace(keys: k, samples: v, channelType: p.segd)
+
+proc putBe(b: var seq[byte]; at, width: int; v: uint64) =
+  for i in 0 ..< width:
+    b[at + i] = byte((v shr (8 * (width - 1 - i))) and 0xFF)
+
+proc putFloat(b: var seq[byte]; at: int; v: float64) =
+  putBe(b, at, 8, cast[uint64](v))
+
+proc putId(b: var seq[byte]; at: int; v: int64) =
+  ## A 32-bit number the caller may leave out: -1 is the block's "none".
+  putBe(b, at, 4, if v < 0: uint64(None32) else: uint64(v))
+
+proc buildBlock(s: VibShot; opts: VibWriteOptions): seq[byte] =
+  ## The shot block's bytes, nothing checked (`checkOptions` and `checkBlockFields` did).
+  result = newSeq[byte](VibShotBlockBytes)
+  let first = if opts.externalConverter: opts.converterCut else: 0
+  for i, c in VibShotMagic:
+    result[i] = byte(c)
+  putBe(result, 8, 2, ShotLayoutVersion)
+  putBe(result, 10, 2, VibShotBlockBytes)
+  putBe(result, 12, 4, uint64(recordOf(s, opts)))
+  putId(result, 16, s.nameNumber)
+  putId(result, 20, opts.controllerSerial)
+  putId(result, 24, opts.datFileNumber)
+  result[28] = byte(ord(s.complete))
+  result[29] = byte(ord(s.endsInSweep))
+  let plans = plan(s, opts, false)
+  result[30] = byte(plans.len)
+  result[31] = 0 # polarity: always as recorded
+  putBe(result, 32, 4, uint64(s.len))
+  putBe(result, 36, 4, uint64(first))
+  putBe(result, 40, 4, uint64(s.len - first))
+  putBe(result, 44, 4, uint64(s.tailBytes))
+  putFloat(result, 48, s.sampleIntervalUs)
+  putFloat(result, 56, (float64(first) - originFrame(s, opts)) * s.sampleIntervalUs / 1000)
+  let clock = clockOfZero(s, opts)
+  putBe(result, 64, 8, cast[uint64](clock.seconds))
+  putBe(result, 72, 4, uint64(clock.nanosecond))
+  result[76] = byte(ord(opts.timeAxis))
+  result[77] = byte(if opts.timeAxis == vaTrigger and s.hasTrigger: 0 else: 1)
+  result[78] = byte(ord(s.triggerSource))
+  result[79] = byte(ord(s.triggerKnown))
+  putFloat(result, 80, s.triggerFrame)
+  putFloat(result, 88, s.triggerSigmaFrames)
+  if s.triggerKnown:
+    let t = s.trigger
+    putBe(result, 96, 2, uint64(t.year))
+    result[98] = byte(t.month)
+    result[99] = byte(t.day)
+    result[100] = byte(t.hour)
+    result[101] = byte(t.minute)
+    result[102] = byte(t.second)
+    putBe(result, 104, 4, uint64(t.nanosecond))
+  let w = s.sweep
+  result[112] = byte(ord(w.valid))
+  putBe(result, 116, 4, uint64(max(0, min(w.crossings, int(None32)))))
+  putFloat(result, 120, w.triggerFrame)
+  putFloat(result, 128, w.triggerSigmaFrames)
+  putFloat(result, 136, w.startHz)
+  putFloat(result, 144, w.rateHzPerS)
+  putFloat(result, 152, w.residualCycles)
+  putFloat(result, 160, w.rmsCycles)
+  result[168] = byte(ord(opts.units))
+  result[169] = byte(ord(opts.force))
+  result[170] = byte(ord(opts.removeMean))
+  result[171] = byte(ord(opts.cycleValues))
+  for which in opts.groundForce:
+    result[172] = result[172] or byte(1 shl ord(which))
+  result[173] = byte(ord(opts.primary))
+  result[174] = byte(ord(opts.traceOrder))
+  result[175] = byte(ord(opts.externalConverter))
+  result[176] = byte(ord(opts.segdReference))
+  var bits = 0'u64
+  for c in opts.channels:
+    bits = bits or (1'u64 shl ord(c))
+  putBe(result, 178, 2, bits)
+  putFloat(result, 180, opts.scale.accMvPerCount)
+  putFloat(result, 188, opts.scale.torquePctPerCount)
+  putFloat(result, 196, opts.scale.lvdtFactor)
+  putFloat(result, 204, opts.scale.drivePerCount)
+  for i, v in s.header.raw:
+    result[HeaderAt + i] = v
+  for i, p in plans:
+    let at = TableAt + TableEntryBytes * i
+    let (f, m, f2, m2) = factorsOf(s, p, opts)
+    result[at] = byte(i + 1)
+    result[at + 1] = byte(case p.kind
+      of tkChannel: ord(p.channel)
+      of tkCycle: 9 + ord(p.cycle)
+      of tkGround: 11 + ord(p.which))
+    putBe(result, at + 2, 2, uint64(cast[uint16](p.code)))
+    result[at + 4] = byte(ord(p.segd))
+    result[at + 5] = byte(ord(unitOf(p, opts)))
+    putFloat(result, at + 8, f)
+    putFloat(result, at + 16, m)
+    putFloat(result, at + 24, f2)
+    putFloat(result, at + 32, m2)
+  let why = incompleteWords(s.incompleteWhy)
+  for i in 0 ..< WhyBytes: # blanks, so that the map's `(trim right)` gives the words alone
+    result[WhyAt + i] = if i < why.len: byte(why[i]) else: 0x20
+
+proc shotBlock*(s: VibShot; opts: VibWriteOptions): seq[byte] =
+  ## The 1280-byte shot block of `s` written with `opts`: every value of the record that
+  ## is not a sample (the decoded frame count, trigger and sweep fit, the caller's record
+  ## number, serial and `.dat` file number, the options), a table of the traces written
+  ## (what each is, its codes, unit, factor and mean) and the file's 47 header bytes,
+  ## verbatim. Big-endian, laid out as the vendor maps in `vendormaps/` say (byte 1
+  ## `VibShotMagic`, layout version 1, block length 1280). An integer that is not known
+  ## is 0xFFFFFFFF, a float NaN, the trigger time zeros (with `triggerKnown` 0); unused
+  ## bytes are 0, and the 76 of `incompleteWhy` are blanks after the words, cut at the
+  ## last space. The samples are not in it, and no sign is changed anywhere. Raises
+  ## `VibWriteError` for options `writeSegy` refuses or a value the block cannot hold.
+  checkOptions(s, opts, false)
+  checkBlockFields(s, opts)
+  buildBlock(s, opts)
 
 template translating(s: VibInfo; what: string; body: untyped) =
   try:
@@ -450,14 +682,22 @@ proc writeSegyTraces*(w: var SeismicWriter; s: VibShot; opts = VibWriteOptions()
 proc writeSegdTraces*(w: var SeismicWriter; s: VibShot; opts = VibWriteOptions()) =
   ## Appends the traces of `s` to the open SEG-D Rev 3 writer `w`, one record numbered
   ## by `opts.record` (records must not go backwards: sort shots by number). The time
-  ## is kept to the microsecond, the resolution of SEG-D's timestamps. The writer makes one
+  ## is kept to the microsecond, the resolution of SEG-D's timestamps. With
+  ## `vendorLayout` the first trace of the record carries the shot block as the
+  ## record's external header. The writer makes one
   ## channel set per channel type, so the file's trace order is by type, not the order
   ## written. Raises
   ## `VibWriteError` (see the module's text), also for `externalConverter`.
   checkOptions(s, opts, true)
+  var block0: seq[byte] = @[]
+  if opts.vendorLayout:
+    block0 = buildBlock(s, opts)
+  var first = true
   for t in outTraces(s, opts, true, false):
     translating(s, "SEG-D"):
-      w.writeTrace(t.keys, t.samples, [], t.channelType)
+      w.writeTrace(t.keys, t.samples, [], t.channelType,
+        externalHeader = (if first: block0 else: @[]))
+    first = false
 
 func wrapped(cards: var seq[string]; text: string) =
   ## Adds `text` as cards of at most `CardWidth` characters, broken at spaces.
@@ -469,31 +709,30 @@ func wrapped(cards: var seq[string]; text: string) =
     rest = "  " & rest[at .. ^1].strip(trailing = false)
   cards.add rest
 
-func unitOf(p: TracePlan; opts: VibWriteOptions): string =
-  let physical = opts.units == vuPhysical or opts.externalConverter
-  if not physical:
-    return (if p.kind == tkGround: "pound-counts" else: "counts")
-  case p.kind
-  of tkCycle: "as stored"
-  of tkGround: "lbf"
-  of tkChannel:
-    case p.channel
-    of vcReference: "lbf"
-    of vcBaseplateA, vcMassA, vcBaseplateB, vcMassB:
-      if opts.force or opts.externalConverter: "lbf" else: "g"
-    of vcTorqueMotor, vcValve, vcMassStroke: "percent"
-    of vcDrive: "unit unknown"
+func withVibShotCard*(cards: seq[string]): seq[string] =
+  ## `cards` as the first 36 cards (blank ones added, those beyond the 36th dropped)
+  ## and card 37 `VibShotCardText`, which a SEG-Y file with shot stanzas must carry.
+  result = cards
+  if result.len > RecognitionCard - 1:
+    result.setLen(RecognitionCard - 1)
+  while result.len < RecognitionCard - 1:
+    result.add ""
+  result.add VibShotCardText
 
 proc textCards*(s: VibShot; opts: VibWriteOptions): seq[string] =
   ## The textual header cards of a SEG-Y file written from `s`: each at most 76
   ## characters (parseSEG adds a card number), longer lines continued on the next
-  ## card. Raises `VibWriteError` for options `writeSegy` would refuse.
+  ## card, at most 38 cards; with `vendorLayout` the first 36 and card 37
+  ## (`withVibShotCard`). Raises `VibWriteError` for options `writeSegy` would refuse.
   checkOptions(s, opts, false)
   var cards: seq[string] = @[]
   cards.wrapped "vibrator controller .vib signature record"
   if opts.controllerSerial >= 0:
     cards.wrapped "controller serial " & $opts.controllerSerial &
       " (given by the caller, not in the file)"
+  if opts.datFileNumber >= 0:
+    cards.wrapped "paired with .dat file number " & $opts.datFileNumber &
+      " (given by the caller)"
   cards.wrapped "recording began " & $s.start & " (to the second), record " &
     $recordOf(s, opts) & ", sample interval " & $s.sampleIntervalUs & " us (assumed)"
   let axisTrigger = opts.timeAxis == vaTrigger and s.hasTrigger
@@ -517,7 +756,7 @@ proc textCards*(s: VibShot; opts: VibWriteOptions): seq[string] =
   var number = 0
   for p in plan(s, opts, false):
     inc number
-    cards.wrapped "trace " & $number & " " & p.name & " (" & unitOf(p, opts) & ")"
+    cards.wrapped "trace " & $number & " " & p.name & " (" & $unitOf(p, opts) & ")"
   if opts.externalConverter:
     cards.wrapped "converter-compatible traces: first " & $opts.converterCut &
       " frames dropped, mean removed"
@@ -541,6 +780,9 @@ proc textCards*(s: VibShot; opts: VibWriteOptions): seq[string] =
   if s.endsInSweep:
     cards.wrapped "the record ends inside the sweep: a stopped recording"
   cards.wrapped "written by parseSSVIB " & PackageVersion
+  if cards.len > MaxTextCards: cards.setLen(MaxTextCards)
+  if opts.vendorLayout:
+    cards = withVibShotCard(cards)
   cards
 
 proc finish(w: var SeismicWriter) =
@@ -550,6 +792,17 @@ proc finish(w: var SeismicWriter) =
     problems.add d.msg
   if problems.len > 0:
     raise newException(CloseDiagnostics, problems.join("; "))
+
+proc addShotBlock*(w: var SeismicWriter; s: VibShot; opts = VibWriteOptions()) =
+  ## Adds the shot block of `s` to the open SEG-Y writer `w` as the stanza
+  ## `parseSSVIB:Shot v1`. Call it for every shot to go into the file, before the first
+  ## trace of any (parseSEG takes stanzas only then), and open the writer with a text
+  ## header that holds card 37 (`withVibShotCard`, which `textCards` applies with
+  ## `vendorLayout`). `writeSegy` does all of it for one shot. Raises `VibWriteError`,
+  ## also for parseSEG's refusals (after the first trace, a SEG-D writer, Rev 0).
+  let block0 = shotBlock(s, opts)
+  translating(s, "SEG-Y"):
+    w.addStanza("parseSSVIB", "Shot v1", block0)
 
 proc writeSegy*(s: VibShot; path: string; opts = SegyOutputOptions();
     vib = VibWriteOptions()) =
@@ -562,12 +815,19 @@ proc writeSegy*(s: VibShot; path: string; opts = SegyOutputOptions();
   if vib.externalConverter and opts.revision.major != 1:
     fail(s, "the external converter's traces are SEG-Y Rev 1 only, not Rev " &
       $opts.revision.major)
+  if vib.vendorLayout and opts.revision.major < 1:
+    fail(s, "the vendor layout needs SEG-Y Rev 1 or later (Rev 0 has no extended " &
+      "textual header): choose a later revision or set vendorLayout to false")
   var o = opts
   if o.text.len == 0:
     o.text = textCards(s, vib)
+  elif vib.vendorLayout:
+    o.text = withVibShotCard(o.text)
   var w: SeismicWriter
   translating(s, "SEG-Y"):
     w = openSeismicWriter(path, o)
+  if vib.vendorLayout:
+    w.addShotBlock(s, vib)
   w.writeSegyTraces(s, vib, opts.revision.major >= 2, int(opts.revision.major))
   translating(s, "SEG-Y"):
     w.finish()
@@ -659,7 +919,9 @@ proc writeSegdTo*(s: VibShot; folder: string; serial: int64; vib = VibWriteOptio
     overwrite = false): string =
   ## `writeSegy`'s SEG-D twin: `writeSegd` into `folder` under `vibFileStem(s, serial)`
   ## and `.sgd`; returns the path. As `writeSegyTo`.
-  checkOptions(s, vib, true)
+  var v = vib
+  v.controllerSerial = serial
+  checkOptions(s, v, true)
   result = claimedPath(s, serial, folder, ".sgd", overwrite)
   writeClaimed(result, overwrite):
-    s.writeSegd(result, vib)
+    s.writeSegd(result, v)

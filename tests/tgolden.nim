@@ -100,11 +100,13 @@ proc main*() =
   for si, s in shots():
     for c in cases():
       let p = dir / "g.out"
+      var vib = c.vib
+      vib.vendorLayout = false # the hashes pin the traces of the first release
       if c.segd:
-        s.writeSegd(p, c.vib)
+        s.writeSegd(p, vib)
       else:
         s.writeSegy(p, SegyOutputOptions(revision: SegyRevision(major: c.major, minor: 0)),
-          c.vib)
+          vib)
       let data = readFile(p)
       rows.add (c.name & " shot " & $si, data.len, fnv(data))
   when defined(printGolden):
