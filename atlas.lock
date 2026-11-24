@@ -3,7 +3,7 @@
     "parseSEG": {
       "dir": "$deps/parseSEG",
       "url": "https://github.com/xrfez/parseSEG",
-      "commit": "9ab1a4490e8ca9bfaadcfc65a3ac414112f93b24",
+      "commit": "4ae716c6eeb9d542b887494a3f76191c11aec7a2",
       "version": ""
     },
     "Arraymancer": {
@@ -89,7 +89,7 @@
     "content": [
       "# Package",
       "",
-      "version       = \"0.1.0\"",
+      "version       = \"0.1.1\"",
       "author        = \"Joshua Fenner\"",
       "description   = \"Decode a vibrator controller's .vib signature files and write them as SEG-Y or SEG-D\"",
       "license       = \"MIT\"",
@@ -99,7 +99,7 @@
       "# Dependencies",
       "",
       "requires \"nim >= 2.4.0\"",
-      "requires \"https://github.com/xrfez/parseSEG >= 0.19.1\"",
+      "requires \"https://github.com/xrfez/parseSEG >= 0.21.1\"",
       ""
     ]
   },

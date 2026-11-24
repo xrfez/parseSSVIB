@@ -17,7 +17,7 @@
 ## `round` taken out, `roundedClock` fails; with the interval, record or trigger bounds
 ## taken out, `intervalBound`, `recordBound` and `cardLoop` fail.
 
-import std/[atomics, math, os, sequtils, strutils]
+import std/[atomics, math, options, os, sequtils, strutils]
 import parseSEG
 import parseSSVIB
 import vibsynth
@@ -503,7 +503,10 @@ proc main*() =
     for i in 0 ..< 10:
       let k = f.traceKeys(i)
       doAssert k.record == 1 and k.status == tsAuxiliary, $k.status
-      doAssert abs(k.time - start) < 1e-6, $(k.time, start)
+      # a Rev 3 read gives the first sample's instant; the record's time zero is apart
+      doAssert abs(k.time - (start + k.t0Ms / 1000.0)) < 1e-6, $(k.time, start, k.t0Ms)
+      let tz = f.recordTimeZeroUs(i)
+      doAssert tz.isSome and tz.get == int64(round(start * 1e6)), $(tz, start)
       doAssert k.srcX.isNaN and k.srcY.isNaN, "no position is written"
     let back = readBack(f, 10)
     for c in VibChannel:

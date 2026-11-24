@@ -144,7 +144,7 @@ written samples) and the file's 47 header bytes, verbatim.
 - The polarity is as recorded; a block never holds a flipped sign, and the table says how
   each sample was made from the counts.
 
-Needs parseSEG 0.19.1 or later.
+Needs parseSEG 0.21.1 or later.
 
 ## Many files
 

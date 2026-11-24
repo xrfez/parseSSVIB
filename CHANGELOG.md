@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Needs parseSEG 0.21.1. A SEG-D file read back gives each trace the instant of its first sample; the record's time zero is read with `recordTimeZeroUs`. SEG-Y files are unchanged. A SEG-D file's Timestamp blocks now hold the first sample's instant (the record's time zero plus the start delay); its length and its other bytes are unchanged.
+
 ## 0.1.0 - 2026-11-22
 
 - Decoder for a vibrator controller's `.vib` signature files: `parseVib`, `readVib`,
